@@ -82,7 +82,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
             'user_type': _selectedUserType.toLowerCase(),
             'id_number': _idNumberController.text,
             'department': _departmentController.text,
-            'is_online': true, // Set online status to false on sign up (will be set to true on sign in)
+            'is_online': true, // Set online status to true on sign up
             'is_anonymous': false, // Set anonymous to false by default
             'last_active_at': now,
             'created_at': now,
@@ -100,11 +100,19 @@ class _SignUpScreenState extends State<SignUpScreen> {
                 fontSize: 16.0
             );
 
-            // Navigate to appropriate screen based on user type
+            // Navigate based on user type
             if (_selectedUserType.toLowerCase() == 'student') {
               Navigator.pushReplacementNamed(context, '/student_home');
-            } else {
-              // For other user types, go to sign in for now
+            } else if (_selectedUserType.toLowerCase() == 'counselor') {
+              Navigator.pushReplacementNamed(context, '/counselor_home');
+            } else if (_selectedUserType.toLowerCase() == 'admin') {
+              // For admin, go to sign in for now until admin interface is implemented
+              Fluttertoast.showToast(
+                msg: "Admin interface coming soon. Please sign in again.",
+                toastLength: Toast.LENGTH_LONG,
+                gravity: ToastGravity.BOTTOM,
+                backgroundColor: Colors.orange,
+              );
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(

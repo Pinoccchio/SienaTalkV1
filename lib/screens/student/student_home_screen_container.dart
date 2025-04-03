@@ -15,58 +15,29 @@ class StudentHomeScreenContainer extends StatefulWidget {
 class _StudentHomeScreenContainerState extends State<StudentHomeScreenContainer> {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = [
-    const StudentHomeScreen(),
-    const StudentChatScreen(),
-    const StudentAppointmentsScreen(),
-    const StudentProfileScreen(),
-  ];
-
-  final List<String> _titles = [
-    'Home',
-    'Chat',
-    'Appointments',
-    'Profile',
-  ];
+  // Method to navigate to a specific tab
+  void _navigateToTab(int index) {
+    setState(() {
+      _currentIndex = index;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    // Create screens list with navigation callback for the home screen
+    final List<Widget> screens = [
+      StudentHomeScreen(onNavigate: _navigateToTab),
+      const StudentChatScreen(),
+      const StudentAppointmentsScreen(),
+      const StudentProfileScreen(),
+    ];
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          _titles[_currentIndex],
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        backgroundColor: AppColors.primary,
-        elevation: 0,
-        actions: [
-          if (_currentIndex != 3) // Don't show on profile screen
-            IconButton(
-              icon: const Icon(Icons.notifications_outlined, color: Colors.white),
-              onPressed: () {
-                // TODO: Navigate to notifications screen
-              },
-            ),
-          if (_currentIndex == 0) // Only show on home screen
-            IconButton(
-              icon: const Icon(Icons.search, color: Colors.white),
-              onPressed: () {
-                // TODO: Show search functionality
-              },
-            ),
-        ],
-      ),
-      body: _screens[_currentIndex],
+      // AppBar removed from here - each screen will have its own AppBar
+      body: screens[_currentIndex],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
+        onTap: _navigateToTab,
         type: BottomNavigationBarType.fixed,
         backgroundColor: Colors.white,
         selectedItemColor: AppColors.primary,

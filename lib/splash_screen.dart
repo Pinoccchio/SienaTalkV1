@@ -123,27 +123,34 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
         }
       }
 
+      // Update online status
+      try {
+        final now = DateTime.now().toIso8601String();
+        await _supabase
+            .from('user_profiles')
+            .update({
+          'is_online': true,
+          'last_active_at': now,
+        })
+            .eq('user_id', currentUser.uid);
+        print('Updated online status to true');
+      } catch (updateError) {
+        print('Error updating online status: $updateError');
+        // Continue even if update fails
+      }
+
       // Navigate based on user type
       if (mounted) {
         if (userType == 'student') {
           print('Navigating to student home screen');
           Navigator.pushReplacementNamed(context, '/student_home');
         } else if (userType == 'counselor') {
-          print('Counselor interface not implemented yet');
-          Fluttertoast.showToast(
-              msg: "Counselor interface not implemented yet",
-              toastLength: Toast.LENGTH_LONG,
-              gravity: ToastGravity.BOTTOM,
-              backgroundColor: Colors.orange,
-              textColor: Colors.white,
-              fontSize: 16.0
-          );
-          // For now, go to sign in screen
-          Navigator.pushReplacementNamed(context, '/signin');
+          print('Navigating to counselor home screen');
+          Navigator.pushReplacementNamed(context, '/counselor_home');
         } else if (userType == 'admin') {
           print('Admin interface not implemented yet');
           Fluttertoast.showToast(
-              msg: "Admin interface not implemented yet",
+              msg: "Admin interface coming soon",
               toastLength: Toast.LENGTH_LONG,
               gravity: ToastGravity.BOTTOM,
               backgroundColor: Colors.orange,

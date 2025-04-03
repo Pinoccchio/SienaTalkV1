@@ -126,6 +126,10 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
   Future<void> _updateProfile() async {
     if (!_formKey.currentState!.validate()) return;
 
+    // Show confirmation dialog
+    final bool confirmed = await _showUpdateConfirmationDialog();
+    if (!confirmed) return;
+
     setState(() {
       _isUpdating = true;
       _errorMessage = null;
@@ -203,7 +207,45 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
     }
   }
 
+  Future<bool> _showUpdateConfirmationDialog() async {
+    return await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirm Update'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Are you sure you want to update your profile with the following information?'),
+            const SizedBox(height: 16),
+            Text('Full Name: ${_fullNameController.text}', style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text('ID Number: ${_idNumberController.text}', style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text('Department: ${_departmentController.text}', style: const TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    ) ?? false;
+  }
+
   Future<void> _toggleAnonymousMode() async {
+    // Show confirmation dialog
+    final bool confirmed = await _showAnonymousModeConfirmationDialog(!_isAnonymous);
+    if (!confirmed) return;
+
     setState(() {
       _isUpdating = true;
     });
@@ -302,7 +344,39 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
     }
   }
 
+  Future<bool> _showAnonymousModeConfirmationDialog(bool newState) async {
+    return await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(newState ? 'Enable Anonymous Mode' : 'Disable Anonymous Mode'),
+        content: Text(
+            newState
+                ? 'When anonymous mode is enabled, your identity will be hidden when chatting with counselors. Do you want to enable anonymous mode?'
+                : 'When anonymous mode is disabled, counselors will be able to see your identity. Do you want to disable anonymous mode?'
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    ) ?? false;
+  }
+
   Future<void> _signOut() async {
+    // Show confirmation dialog
+    final bool confirmed = await _showSignOutConfirmationDialog();
+    if (!confirmed) return;
+
     try {
       final currentUser = _firebaseAuth.currentUser;
 
@@ -358,6 +432,30 @@ class _StudentProfileScreenState extends State<StudentProfileScreen> {
         ),
       );
     }
+  }
+
+  Future<bool> _showSignOutConfirmationDialog() async {
+    return await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Sign Out'),
+        content: const Text('Are you sure you want to sign out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Sign Out'),
+          ),
+        ],
+      ),
+    ) ?? false;
   }
 
   @override

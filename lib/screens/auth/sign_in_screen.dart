@@ -159,21 +159,12 @@ class _SignInScreenState extends State<SignInScreen> {
                 print('Navigating to student home screen');
                 Navigator.pushReplacementNamed(context, '/student_home');
               } else if (userType == 'counselor') {
-                print('Counselor interface not implemented yet');
-                Fluttertoast.showToast(
-                    msg: "Counselor interface not implemented yet",
-                    toastLength: Toast.LENGTH_LONG,
-                    gravity: ToastGravity.BOTTOM,
-                    backgroundColor: Colors.orange,
-                    textColor: Colors.white,
-                    fontSize: 16.0
-                );
-                // For now, go to sign in screen
-                Navigator.pushReplacementNamed(context, '/signin');
+                print('Navigating to counselor home screen');
+                Navigator.pushReplacementNamed(context, '/counselor_home');
               } else if (userType == 'admin') {
                 print('Admin interface not implemented yet');
                 Fluttertoast.showToast(
-                    msg: "Admin interface not implemented yet",
+                    msg: "Admin interface coming soon",
                     toastLength: Toast.LENGTH_LONG,
                     gravity: ToastGravity.BOTTOM,
                     backgroundColor: Colors.orange,
@@ -188,6 +179,8 @@ class _SignInScreenState extends State<SignInScreen> {
 
                 if (_selectedUserType.toLowerCase() == 'student') {
                   Navigator.pushReplacementNamed(context, '/student_home');
+                } else if (_selectedUserType.toLowerCase() == 'counselor') {
+                  Navigator.pushReplacementNamed(context, '/counselor_home');
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
@@ -204,6 +197,8 @@ class _SignInScreenState extends State<SignInScreen> {
               // Even if we can't fetch the profile, navigate based on the selected user type
               if (_selectedUserType.toLowerCase() == 'student') {
                 Navigator.pushReplacementNamed(context, '/student_home');
+              } else if (_selectedUserType.toLowerCase() == 'counselor') {
+                Navigator.pushReplacementNamed(context, '/counselor_home');
               } else {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(

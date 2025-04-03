@@ -6,7 +6,9 @@ import '../../utils/app_colors.dart';
 import '../../widgets/feature_card.dart';
 
 class StudentHomeScreen extends StatefulWidget {
-  const StudentHomeScreen({Key? key}) : super(key: key);
+  final Function(int)? onNavigate;
+
+  const StudentHomeScreen({Key? key, this.onNavigate}) : super(key: key);
 
   @override
   State<StudentHomeScreen> createState() => _StudentHomeScreenState();
@@ -141,33 +143,74 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (_errorMessage != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, size: 48, color: Colors.red),
-            const SizedBox(height: 16),
-            Text(
-              'Error loading data',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(_errorMessage ?? 'Unknown error'),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: _loadUserData,
-              child: const Text('Retry'),
-            ),
-          ],
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Home',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
         ),
-      );
-    }
+        backgroundColor: AppColors.primary,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search, color: Colors.white),
+            onPressed: () {
+              // TODO: Show search functionality
+              Fluttertoast.showToast(
+                msg: "Search feature coming soon!",
+                toastLength: Toast.LENGTH_SHORT,
+                gravity: ToastGravity.BOTTOM,
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.notifications_outlined, color: Colors.white),
+            onPressed: () {
+              // TODO: Navigate to notifications screen
+              Fluttertoast.showToast(
+                msg: "Notifications feature coming soon!",
+                toastLength: Toast.LENGTH_SHORT,
+                gravity: ToastGravity.BOTTOM,
+              );
+            },
+          ),
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : (_errorMessage != null
+          ? _buildErrorView()
+          : _buildHomeContent()),
+    );
+  }
 
+  Widget _buildErrorView() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.error_outline, size: 48, color: Colors.red),
+          const SizedBox(height: 16),
+          Text(
+            'Error loading data',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Text(_errorMessage ?? 'Unknown error'),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: _loadUserData,
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHomeContent() {
     return RefreshIndicator(
       onRefresh: _loadUserData,
       child: SingleChildScrollView(
@@ -206,44 +249,28 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                   ),
                   const SizedBox(height: 20),
 
-                  // Quick actions
+                  // Quick actions - Removed Counselors and changed Schedule to Appointments
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
                       _buildQuickAction(
                         icon: Icons.chat_bubble_outline,
                         label: 'Chat',
                         onTap: () {
-                          // Navigate to chat screen
-                          Fluttertoast.showToast(
-                            msg: "Chat feature coming soon!",
-                            toastLength: Toast.LENGTH_SHORT,
-                            gravity: ToastGravity.BOTTOM,
-                          );
+                          // Navigate to chat screen (index 1)
+                          if (widget.onNavigate != null) {
+                            widget.onNavigate!(1);
+                          }
                         },
                       ),
                       _buildQuickAction(
                         icon: Icons.calendar_today_outlined,
-                        label: 'Schedule',
+                        label: 'Appointments',
                         onTap: () {
-                          // Navigate to appointment scheduling
-                          Fluttertoast.showToast(
-                            msg: "Schedule feature coming soon!",
-                            toastLength: Toast.LENGTH_SHORT,
-                            gravity: ToastGravity.BOTTOM,
-                          );
-                        },
-                      ),
-                      _buildQuickAction(
-                        icon: Icons.person_outline,
-                        label: 'Counselors',
-                        onTap: () {
-                          // Navigate to counselor list
-                          Fluttertoast.showToast(
-                            msg: "Counselor list feature coming soon!",
-                            toastLength: Toast.LENGTH_SHORT,
-                            gravity: ToastGravity.BOTTOM,
-                          );
+                          // Navigate to appointment scheduling (index 2)
+                          if (widget.onNavigate != null) {
+                            widget.onNavigate!(2);
+                          }
                         },
                       ),
                     ],
@@ -306,11 +333,10 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                           icon: Icons.chat_bubble_outlined,
                           title: 'Chat with counselors',
                           onTap: () {
-                            Fluttertoast.showToast(
-                              msg: "Chat feature coming soon!",
-                              toastLength: Toast.LENGTH_SHORT,
-                              gravity: ToastGravity.BOTTOM,
-                            );
+                            // Navigate to chat screen (index 1)
+                            if (widget.onNavigate != null) {
+                              widget.onNavigate!(1);
+                            }
                           },
                         ),
                       ),
@@ -320,48 +346,16 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                           icon: Icons.calendar_today_outlined,
                           title: 'Schedule appointments',
                           onTap: () {
-                            Fluttertoast.showToast(
-                              msg: "Schedule feature coming soon!",
-                              toastLength: Toast.LENGTH_SHORT,
-                              gravity: ToastGravity.BOTTOM,
-                            );
+                            // Navigate to appointments screen (index 2)
+                            if (widget.onNavigate != null) {
+                              widget.onNavigate!(2);
+                            }
                           },
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FeatureCard(
-                          icon: Icons.article_outlined,
-                          title: 'Resources',
-                          onTap: () {
-                            Fluttertoast.showToast(
-                              msg: "Resources feature coming soon!",
-                              toastLength: Toast.LENGTH_SHORT,
-                              gravity: ToastGravity.BOTTOM,
-                            );
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: FeatureCard(
-                          icon: Icons.notifications_outlined,
-                          title: 'Notifications',
-                          onTap: () {
-                            Fluttertoast.showToast(
-                              msg: "Notifications feature coming soon!",
-                              toastLength: Toast.LENGTH_SHORT,
-                              gravity: ToastGravity.BOTTOM,
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
+                  // Removed Resources and Notifications cards as requested
                 ],
               ),
             ),

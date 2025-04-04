@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:fluttertoast/fluttertoast.dart';
+import 'package:intl/intl.dart';
 
 import '../../utils/app_colors.dart';
 import '../../widgets/feature_card.dart';
 
 class CounselorHomeScreen extends StatefulWidget {
-  const CounselorHomeScreen({Key? key}) : super(key: key);
+  final Function(int)? onNavigate;
+
+  const CounselorHomeScreen({Key? key, this.onNavigate}) : super(key: key);
 
   @override
   State<CounselorHomeScreen> createState() => _CounselorHomeScreenState();
@@ -20,8 +23,11 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
   bool _isLoading = true;
   String _userName = "Counselor";
   String? _errorMessage;
-  int _activeStudents = 0;
+  int _onlineStudents = 0;
+  int _offlineStudents = 0;
+  int _totalStudents = 0;
   int _pendingAppointments = 0;
+  List<Map<String, dynamic>> _todayAppointments = [];
 
   @override
   void initState() {
@@ -97,11 +103,14 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
           }
         }
 
-        // Fetch active students count (mock data for now)
-        _activeStudents = 12;
+        // Load active students count
+        await _loadStudentsCounts(currentUser.uid);
 
-        // Fetch pending appointments count (mock data for now)
-        _pendingAppointments = 5;
+        // Load pending appointments count
+        await _loadPendingAppointmentsCount(currentUser.uid);
+
+        // Load today's appointments
+        await _loadTodayAppointments(currentUser.uid);
 
       } catch (profileError) {
         print('Error fetching user profile: $profileError');
@@ -114,29 +123,200 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
         }
       }
 
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
 
     } catch (e) {
       print('Error loading user data: $e');
-      setState(() {
-        _errorMessage = 'Failed to load data: $e';
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Failed to load data: $e';
+          _isLoading = false;
+        });
 
-      Fluttertoast.showToast(
-          msg: "Error loading data: $e",
-          toastLength: Toast.LENGTH_LONG,
-          gravity: ToastGravity.BOTTOM,
-          backgroundColor: Colors.red,
-          textColor: Colors.white,
-          fontSize: 16.0
-      );
+        Fluttertoast.showToast(
+            msg: "Error loading data: $e",
+            toastLength: Toast.LENGTH_LONG,
+            gravity: ToastGravity.BOTTOM,
+            backgroundColor: Colors.red,
+            textColor: Colors.white,
+            fontSize: 16.0
+        );
+      }
     }
   }
 
-  // Update only the _signOut method in the CounselorHomeScreen class
+  Future<void> _loadStudentsCounts(String counselorId) async {
+    try {
+      // Get all students who have had appointments with this counselor
+      final appointmentsData = await _supabase
+          .from('appointments')
+          .select('student_id')
+          .eq('counselor_id', counselorId)
+          .not('status', 'eq', 'cancelled');
+
+      // Extract unique student IDs
+      final studentIds = appointmentsData
+          .map((appointment) => appointment['student_id'] as String?)
+          .where((id) => id != null)
+          .toSet();
+
+      // Get all student profiles
+      List<Map<String, dynamic>> studentsData = [];
+      if (studentIds.isNotEmpty) {
+        // Convert Set to List for the query
+        final studentIdsList = studentIds.toList();
+
+        // Fetch all student profiles that match our student IDs
+        studentsData = await _supabase
+            .from('user_profiles')
+            .select('user_id, is_online')
+            .eq('user_type', 'student')
+            .filter('user_id', 'in', studentIdsList);
+      }
+
+      // Count online and offline students
+      int onlineCount = 0;
+      int offlineCount = 0;
+
+      for (var student in studentsData) {
+        final isOnline = student['is_online'] as bool? ?? false;
+        if (isOnline) {
+          onlineCount++;
+        } else {
+          offlineCount++;
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _onlineStudents = onlineCount;
+          _offlineStudents = offlineCount;
+          _totalStudents = studentsData.length;
+        });
+      }
+    } catch (e) {
+      print('Error loading students counts: $e');
+      // Set default values in case of error
+      if (mounted) {
+        setState(() {
+          _onlineStudents = 0;
+          _offlineStudents = 0;
+          _totalStudents = 0;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadPendingAppointmentsCount(String counselorId) async {
+    try {
+      // Get count of pending appointments for this counselor
+      final data = await _supabase
+          .from('appointments')
+          .select('id')
+          .eq('counselor_id', counselorId)
+          .eq('status', 'pending');
+
+      if (mounted) {
+        setState(() {
+          _pendingAppointments = data.length;
+        });
+      }
+    } catch (e) {
+      print('Error loading pending appointments count: $e');
+      // Set a default value in case of error
+      if (mounted) {
+        setState(() {
+          _pendingAppointments = 0;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadTodayAppointments(String counselorId) async {
+    try {
+      // Get today's date range - this ensures it's always the current day
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final tomorrow = today.add(const Duration(days: 1));
+
+      final todayStart = today.toIso8601String();
+      final todayEnd = tomorrow.toIso8601String();
+
+      // Get appointments for today
+      final appointmentsData = await _supabase
+          .from('appointments')
+          .select('*, student_id, is_anonymous')
+          .eq('counselor_id', counselorId)
+          .gte('appointment_date', todayStart)
+          .lt('appointment_date', todayEnd)
+          .order('appointment_date');
+
+      // Fetch student details for each appointment
+      List<Map<String, dynamic>> appointments = [];
+      for (var appointment in appointmentsData) {
+        final studentId = appointment['student_id'] as String?;
+        final isAnonymous = appointment['is_anonymous'] as bool? ?? false;
+
+        if (studentId != null) {
+          try {
+            final appointmentWithStudent = Map<String, dynamic>.from(appointment);
+
+            if (isAnonymous) {
+              // For anonymous appointments, hide student identity
+              appointmentWithStudent['student_name'] = 'Anonymous Student';
+              appointmentWithStudent['avatar'] = 'A';
+            } else {
+              // For regular appointments, fetch and show student name
+              final studentData = await _supabase
+                  .from('user_profiles')
+                  .select('full_name')
+                  .eq('user_id', studentId)
+                  .single();
+
+              appointmentWithStudent['student_name'] = studentData['full_name'] ?? 'Unknown Student';
+              appointmentWithStudent['avatar'] = studentData['full_name']?.toString().isNotEmpty == true
+                  ? studentData['full_name'].toString()[0].toUpperCase()
+                  : 'S';
+            }
+
+            appointments.add(appointmentWithStudent);
+          } catch (e) {
+            print('Error fetching student details: $e');
+            // Add appointment with default student name
+            final appointmentWithStudent = Map<String, dynamic>.from(appointment);
+
+            if (isAnonymous) {
+              appointmentWithStudent['student_name'] = 'Anonymous Student';
+              appointmentWithStudent['avatar'] = 'A';
+            } else {
+              appointmentWithStudent['student_name'] = 'Unknown Student';
+              appointmentWithStudent['avatar'] = 'S';
+            }
+
+            appointments.add(appointmentWithStudent);
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _todayAppointments = appointments;
+        });
+      }
+    } catch (e) {
+      print('Error loading today\'s appointments: $e');
+      // Set an empty list in case of error
+      if (mounted) {
+        setState(() {
+          _todayAppointments = [];
+        });
+      }
+    }
+  }
 
   Future<void> _signOut() async {
     try {
@@ -214,57 +394,66 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
     }
 
     if (_errorMessage != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, size: 48, color: Colors.red),
-            const SizedBox(height: 16),
-            Text(
-              'Error loading data',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(_errorMessage ?? 'Unknown error'),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: _loadUserData,
-              child: const Text('Retry'),
-            ),
-          ],
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 48, color: Colors.red),
+              const SizedBox(height: 16),
+              const Text(
+                'Error loading data',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text(_errorMessage ?? 'Unknown error'),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _loadUserData,
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
         ),
       );
     }
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Counselor Dashboard'),
+        title: const Text(
+          'Counselor Dashboard',
+          style: TextStyle(color: Colors.white),
+        ),
         backgroundColor: AppColors.counselorColor,
+        iconTheme: const IconThemeData(color: Colors.white), // This makes the menu icon white
         actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_outlined),
-            onPressed: () {
-              Fluttertoast.showToast(
-                msg: "Notifications coming soon!",
-                toastLength: Toast.LENGTH_SHORT,
-                gravity: ToastGravity.BOTTOM,
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () {
-              Fluttertoast.showToast(
-                msg: "Settings coming soon!",
-                toastLength: Toast.LENGTH_SHORT,
-                gravity: ToastGravity.BOTTOM,
-              );
-            },
-          ),
+          // Commented out notification and settings icons as requested
+          // IconButton(
+          //   icon: const Icon(Icons.notifications_outlined),
+          //   onPressed: () {
+          //     Fluttertoast.showToast(
+          //       msg: "Notifications coming soon!",
+          //       toastLength: Toast.LENGTH_SHORT,
+          //       gravity: ToastGravity.BOTTOM,
+          //     );
+          //   },
+          // ),
+          // IconButton(
+          //   icon: const Icon(Icons.settings_outlined),
+          //   onPressed: () {
+          //     Fluttertoast.showToast(
+          //       msg: "Settings coming soon!",
+          //       toastLength: Toast.LENGTH_SHORT,
+          //       gravity: ToastGravity.BOTTOM,
+          //     );
+          //   },
+          // ),
         ],
       ),
       drawer: Drawer(
@@ -289,7 +478,7 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'Dr. $_userName',
+                    _userName,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 18,
@@ -313,6 +502,9 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
               selectedTileColor: AppColors.counselorColor.withOpacity(0.1),
               onTap: () {
                 Navigator.pop(context);
+                if (widget.onNavigate != null) {
+                  widget.onNavigate!(0);
+                }
               },
             ),
             ListTile(
@@ -320,11 +512,9 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
               title: const Text('My Students'),
               onTap: () {
                 Navigator.pop(context);
-                Fluttertoast.showToast(
-                  msg: "Students list coming soon!",
-                  toastLength: Toast.LENGTH_SHORT,
-                  gravity: ToastGravity.BOTTOM,
-                );
+                if (widget.onNavigate != null) {
+                  widget.onNavigate!(1);
+                }
               },
             ),
             ListTile(
@@ -332,11 +522,9 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
               title: const Text('Appointments'),
               onTap: () {
                 Navigator.pop(context);
-                Fluttertoast.showToast(
-                  msg: "Appointments coming soon!",
-                  toastLength: Toast.LENGTH_SHORT,
-                  gravity: ToastGravity.BOTTOM,
-                );
+                if (widget.onNavigate != null) {
+                  widget.onNavigate!(2);
+                }
               },
             ),
             ListTile(
@@ -344,26 +532,13 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
               title: const Text('Messages'),
               onTap: () {
                 Navigator.pop(context);
-                Fluttertoast.showToast(
-                  msg: "Messages coming soon!",
-                  toastLength: Toast.LENGTH_SHORT,
-                  gravity: ToastGravity.BOTTOM,
-                );
+                if (widget.onNavigate != null) {
+                  widget.onNavigate!(3);
+                }
               },
             ),
             const Divider(),
-            ListTile(
-              leading: const Icon(Icons.help_outline),
-              title: const Text('Help & Support'),
-              onTap: () {
-                Navigator.pop(context);
-                Fluttertoast.showToast(
-                  msg: "Help & Support coming soon!",
-                  toastLength: Toast.LENGTH_SHORT,
-                  gravity: ToastGravity.BOTTOM,
-                );
-              },
-            ),
+            // Removed Help & Support option as requested
             ListTile(
               leading: const Icon(Icons.logout),
               title: const Text('Sign Out'),
@@ -383,7 +558,7 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
               children: [
                 // Welcome message
                 Text(
-                  'Welcome, Dr. $_userName!',
+                  'Welcome, $_userName!',
                   style: const TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
@@ -404,20 +579,29 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
                 Row(
                   children: [
                     Expanded(
-                      child: _buildStatCard(
-                        title: 'Active Students',
-                        value: _activeStudents.toString(),
-                        icon: Icons.people,
-                        color: AppColors.counselorColor,
+                      child: GestureDetector(
+                        onTap: () {
+                          if (widget.onNavigate != null) {
+                            widget.onNavigate!(1); // Navigate to Students tab
+                          }
+                        },
+                        child: _buildStudentsCard(),
                       ),
                     ),
                     const SizedBox(width: 16),
                     Expanded(
-                      child: _buildStatCard(
-                        title: 'Pending Appointments',
-                        value: _pendingAppointments.toString(),
-                        icon: Icons.calendar_today,
-                        color: Colors.orange,
+                      child: GestureDetector(
+                        onTap: () {
+                          if (widget.onNavigate != null) {
+                            widget.onNavigate!(2); // Navigate to Appointments tab
+                          }
+                        },
+                        child: _buildStatCard(
+                          title: 'Pending Appointments',
+                          value: _pendingAppointments.toString(),
+                          icon: Icons.calendar_today,
+                          color: Colors.orange,
+                        ),
                       ),
                     ),
                   ],
@@ -425,13 +609,33 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
                 const SizedBox(height: 24),
 
                 // Today's appointments
-                const Text(
-                  'Today\'s Appointments',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Today\'s Appointments',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    if (_todayAppointments.isNotEmpty)
+                      TextButton(
+                        onPressed: () {
+                          if (widget.onNavigate != null) {
+                            widget.onNavigate!(2); // Navigate to Appointments tab
+                          }
+                        },
+                        child: const Text(
+                          'View All',
+                          style: TextStyle(
+                            color: AppColors.counselorColor,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 16),
 
@@ -458,11 +662,9 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
                         icon: Icons.chat_bubble_outlined,
                         title: 'Message Students',
                         onTap: () {
-                          Fluttertoast.showToast(
-                            msg: "Messaging feature coming soon!",
-                            toastLength: Toast.LENGTH_SHORT,
-                            gravity: ToastGravity.BOTTOM,
-                          );
+                          if (widget.onNavigate != null) {
+                            widget.onNavigate!(3); // Navigate to Messages tab
+                          }
                         },
                       ),
                     ),
@@ -472,54 +674,119 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
                         icon: Icons.calendar_today_outlined,
                         title: 'Schedule Appointments',
                         onTap: () {
-                          Fluttertoast.showToast(
-                            msg: "Scheduling feature coming soon!",
-                            toastLength: Toast.LENGTH_SHORT,
-                            gravity: ToastGravity.BOTTOM,
-                          );
+                          if (widget.onNavigate != null) {
+                            widget.onNavigate!(2); // Navigate to Appointments tab
+                          }
                         },
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: FeatureCard(
-                        icon: Icons.assessment_outlined,
-                        title: 'Student Reports',
-                        onTap: () {
-                          Fluttertoast.showToast(
-                            msg: "Reports feature coming soon!",
-                            toastLength: Toast.LENGTH_SHORT,
-                            gravity: ToastGravity.BOTTOM,
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: FeatureCard(
-                        icon: Icons.article_outlined,
-                        title: 'Resources',
-                        onTap: () {
-                          Fluttertoast.showToast(
-                            msg: "Resources feature coming soon!",
-                            toastLength: Toast.LENGTH_SHORT,
-                            gravity: ToastGravity.BOTTOM,
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 24), // Increased height to add more space at the bottom
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildStudentsCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.people,
+                color: AppColors.counselorColor,
+                size: 24,
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.counselorColor.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Text(
+                  _totalStudents.toString(),
+                  style: const TextStyle(
+                    color: AppColors.counselorColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'My Students',
+            style: TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _buildStatusIndicator(
+                count: _onlineStudents,
+                label: 'Online',
+                color: Colors.green,
+              ),
+              const SizedBox(width: 12),
+              _buildStatusIndicator(
+                count: _offlineStudents,
+                label: 'Offline',
+                color: Colors.grey,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusIndicator({
+    required int count,
+    required String label,
+    required Color color,
+  }) {
+    return Row(
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          '$count $label',
+          style: TextStyle(
+            fontSize: 12,
+            color: color,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
     );
   }
 
@@ -584,38 +851,39 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
   }
 
   Widget _buildAppointmentList() {
-    // Mock data for appointments
-    final appointments = [
-      {
-        'name': 'John Doe',
-        'time': '10:00 AM',
-        'status': 'Confirmed',
-        'avatar': 'J',
-      },
-      {
-        'name': 'Jane Smith',
-        'time': '11:30 AM',
-        'status': 'Pending',
-        'avatar': 'J',
-      },
-      {
-        'name': 'Mike Johnson',
-        'time': '2:00 PM',
-        'status': 'Confirmed',
-        'avatar': 'M',
-      },
-    ];
-
-    if (appointments.isEmpty) {
-      return const Card(
+    if (_todayAppointments.isEmpty) {
+      return Card(
         child: Padding(
-          padding: EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(16.0),
           child: Center(
-            child: Text(
-              'No appointments scheduled for today',
-              style: TextStyle(
-                color: AppColors.textSecondary,
-              ),
+            child: Column(
+              children: [
+                Icon(
+                  Icons.event_busy,
+                  size: 48,
+                  color: Colors.grey.shade400,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'No appointments scheduled for today',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: () {
+                    if (widget.onNavigate != null) {
+                      widget.onNavigate!(2); // Navigate to Appointments tab
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.counselorColor,
+                  ),
+                  child: const Text('Schedule Appointment'),
+                ),
+              ],
             ),
           ),
         ),
@@ -623,74 +891,131 @@ class _CounselorHomeScreenState extends State<CounselorHomeScreen> {
     }
 
     return Column(
-      children: appointments.map((appointment) {
-        final isConfirmed = appointment['status'] == 'Confirmed';
+      children: _todayAppointments.map((appointment) {
+        final studentName = appointment['student_name'] as String? ?? 'Unknown Student';
+        final appointmentDate = DateTime.parse(appointment['appointment_date']);
+        final time = DateFormat('h:mm a').format(appointmentDate);
+        final status = appointment['status'] as String? ?? 'pending';
+        final avatar = appointment['avatar'] as String? ?? 'S';
+        final isAnonymous = appointment['is_anonymous'] as bool? ?? false;
 
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  backgroundColor: AppColors.counselorColor.withOpacity(0.2),
-                  child: Text(
-                    appointment['avatar'] as String,
-                    style: const TextStyle(
-                      color: AppColors.counselorColor,
-                      fontWeight: FontWeight.bold,
+          child: InkWell(
+            onTap: () {
+              if (widget.onNavigate != null) {
+                widget.onNavigate!(2); // Navigate to Appointments tab
+              }
+            },
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: isAnonymous
+                        ? Colors.grey.shade800
+                        : AppColors.counselorColor.withOpacity(0.2),
+                    child: Text(
+                      avatar,
+                      style: TextStyle(
+                        color: isAnonymous ? Colors.white : AppColors.counselorColor,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        appointment['name'] as String,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          studentName,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
                         ),
-                      ),
-                      Text(
-                        appointment['time'] as String,
-                        style: const TextStyle(
-                          color: AppColors.textSecondary,
+                        Row(
+                          children: [
+                            Text(
+                              time,
+                              style: const TextStyle(
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                            if (isAnonymous)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                margin: const EdgeInsets.only(left: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade800,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text(
+                                  'Anonymous',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isConfirmed
-                        ? Colors.green.withOpacity(0.1)
-                        : Colors.orange.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    appointment['status'] as String,
-                    style: TextStyle(
-                      color: isConfirmed ? Colors.green : Colors.orange,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
+                      ],
                     ),
                   ),
-                ),
-              ],
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _getStatusColor(status).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      _capitalizeFirst(status),
+                      style: TextStyle(
+                        color: _getStatusColor(status),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         );
       }).toList(),
     );
   }
+
+  Color _getStatusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'confirmed':
+        return Colors.green;
+      case 'pending':
+        return Colors.blue;
+      case 'cancelled':
+        return Colors.red;
+      case 'completed':
+        return Colors.purple;
+      case 'rescheduled':
+        return Colors.orange;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  String _capitalizeFirst(String text) {
+    if (text.isEmpty) return text;
+    return text.substring(0, 1).toUpperCase() + text.substring(1).toLowerCase();
+  }
 }
+

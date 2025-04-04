@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase;
+import 'package:sienatalk/screens/counselor/counselor_chat_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import '../../utils/app_colors.dart';
 import 'counselor_home_screen.dart';
 import 'counselor_appointments_screen.dart';
-import 'counselor_messages_screen.dart';
 import 'counselor_student_screen.dart';
 
 class CounselorContainer extends StatefulWidget {
@@ -19,99 +19,140 @@ class _CounselorContainerState extends State<CounselorContainer> with WidgetsBin
   int _currentIndex = 0;
   final firebase.FirebaseAuth _firebaseAuth = firebase.FirebaseAuth.instance;
   final SupabaseClient _supabase = Supabase.instance.client;
+  bool _isAppInBackground = false;
+  DateTime? _lastBackgroundTime;
 
-  final List<Widget> _screens = [
-    const CounselorHomeScreen(),
-    const CounselorStudentsScreen(),
-    const CounselorAppointmentsScreen(),
-    const CounselorMessagesScreen(),
-  ];
+  // Method to navigate to a specific tab
+  void _navigateToTab(int index) {
+    setState(() {
+      _currentIndex = index;
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     // Register observer for app lifecycle changes
     WidgetsBinding.instance.addObserver(this);
+    // Set user as online when app starts
+    _updateOnlineStatus(true);
   }
 
   @override
   void dispose() {
     // Remove observer when widget is disposed
     WidgetsBinding.instance.removeObserver(this);
+    // Set user as offline when widget is disposed
+    _updateOnlineStatus(false);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Handle app lifecycle changes
-    final userId = _firebaseAuth.currentUser?.uid;
-    if (userId == null) return;
+    super.didChangeAppLifecycleState(state);
 
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.detached ||
-        state == AppLifecycleState.inactive) {
-      // App is in background or closed, update status to offline
-      _updateUserOfflineStatus(userId);
-    } else if (state == AppLifecycleState.resumed) {
-      // App is in foreground, update status to online
-      _updateUserOnlineStatus(userId);
+    // Handle app lifecycle state changes
+    switch (state) {
+      case AppLifecycleState.resumed:
+      // App is in the foreground and visible to the user
+        if (_isAppInBackground) {
+          _isAppInBackground = false;
+
+          // If app was in background for more than 5 minutes, update last_active_at
+          if (_lastBackgroundTime != null) {
+            final now = DateTime.now();
+            final difference = now.difference(_lastBackgroundTime!);
+            if (difference.inMinutes >= 5) {
+              _updateLastActiveTime();
+            }
+          }
+
+          // Set user as online
+          _updateOnlineStatus(true);
+        }
+        break;
+
+      case AppLifecycleState.inactive:
+      // App is inactive, might be switching between apps
+        break;
+
+      case AppLifecycleState.paused:
+      // App is in the background
+        _isAppInBackground = true;
+        _lastBackgroundTime = DateTime.now();
+
+        // Set user as offline when app goes to background
+        _updateOnlineStatus(false);
+        break;
+
+      case AppLifecycleState.detached:
+      // App is detached (terminated)
+        _updateOnlineStatus(false);
+        break;
+
+      default:
+        break;
     }
   }
 
-  Future<void> _updateUserOnlineStatus(String userId) async {
+  Future<void> _updateOnlineStatus(bool isOnline) async {
+    final currentUser = _firebaseAuth.currentUser;
+    if (currentUser == null) return;
+
+    final userId = currentUser.uid;
+    final now = DateTime.now().toIso8601String();
+
     try {
-      final now = DateTime.now().toIso8601String();
-      await _supabase
-          .from('user_profiles')
-          .update({
-        'is_online': true,
-        'last_active_at': now,
-      })
-          .eq('user_id', userId);
-      print('Updated online status to true');
+      print('Updating online status to: $isOnline');
+
+      // Try RPC function first
+      try {
+        await _supabase.rpc(
+          'update_user_online_status',
+          params: {
+            'user_id_param': userId,
+            'is_online_param': isOnline,
+            'last_active_param': now
+          },
+        );
+      } catch (rpcError) {
+        print('RPC error: $rpcError');
+
+        // Fallback to direct update
+        await _supabase
+            .from('user_profiles')
+            .update({
+          'is_online': isOnline,
+          'last_active_at': now,
+        })
+            .eq('user_id', userId);
+      }
     } catch (e) {
       print('Error updating online status: $e');
     }
   }
 
-  Future<void> _updateUserOfflineStatus(String userId) async {
+  Future<void> _updateLastActiveTime() async {
+    final currentUser = _firebaseAuth.currentUser;
+    if (currentUser == null) return;
+
+    final userId = currentUser.uid;
+    final now = DateTime.now().toIso8601String();
+
     try {
-      // Use direct update as a fallback approach
-      final now = DateTime.now().toIso8601String();
       await _supabase
           .from('user_profiles')
-          .update({
-        'is_online': false,
-        'last_active_at': now,
-      })
+          .update({'last_active_at': now})
           .eq('user_id', userId);
-      print('Updated online status to false via direct update');
     } catch (e) {
-      print('Error updating offline status: $e');
+      print('Error updating last active time: $e');
     }
   }
 
   Future<void> _signOut() async {
     try {
-      final userId = _firebaseAuth.currentUser?.uid;
-
-      if (userId != null) {
-        // Try to update the online status before signing out
-        try {
-          final now = DateTime.now().toIso8601String();
-          await _supabase
-              .from('user_profiles')
-              .update({
-            'is_online': false,
-            'last_active_at': now,
-          })
-              .eq('user_id', userId);
-          print('Set user offline before signing out');
-        } catch (e) {
-          print('Error updating online status: $e');
-          // Continue with sign out even if update fails
-        }
-      }
+      // Set user offline before signing out
+      await _updateOnlineStatus(false);
 
       // Sign out from Firebase
       await _firebaseAuth.signOut();
@@ -133,15 +174,19 @@ class _CounselorContainerState extends State<CounselorContainer> with WidgetsBin
 
   @override
   Widget build(BuildContext context) {
+    // Create screens list with navigation callback for the home screen
+    final List<Widget> screens = [
+      CounselorHomeScreen(onNavigate: _navigateToTab),
+      const CounselorStudentsScreen(),
+      const CounselorAppointmentsScreen(),
+      const CounselorChatScreen(),
+    ];
+
     return Scaffold(
-      body: _screens[_currentIndex],
+      body: screens[_currentIndex],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
+        onTap: _navigateToTab,
         type: BottomNavigationBarType.fixed,
         selectedItemColor: AppColors.counselorColor,
         unselectedItemColor: Colors.grey,
@@ -171,3 +216,4 @@ class _CounselorContainerState extends State<CounselorContainer> with WidgetsBin
     );
   }
 }
+

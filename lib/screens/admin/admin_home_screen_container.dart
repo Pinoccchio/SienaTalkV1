@@ -1,20 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:fluttertoast/fluttertoast.dart';
+import 'package:intl/intl.dart';
 import '../../utils/app_colors.dart';
-import 'student_home_screen.dart';
-import 'student_chat_screen.dart';
-import 'student_appointments_screen.dart';
-import 'student_profile_screen.dart';
+import 'admin_appointments_screen.dart';
+import 'admin_chat_histories_screen.dart';
+import 'admin_counselors_screen.dart';
+import 'admin_home_screen.dart';
+import 'admin_statistics_screen.dart';
 
-class StudentHomeScreenContainer extends StatefulWidget {
-  const StudentHomeScreenContainer({Key? key}) : super(key: key);
+class AdminHomeScreenContainer extends StatefulWidget {
+  const AdminHomeScreenContainer({Key? key}) : super(key: key);
 
   @override
-  State<StudentHomeScreenContainer> createState() => _StudentHomeScreenContainerState();
+  State<AdminHomeScreenContainer> createState() => _AdminHomeScreenContainerState();
 }
 
-class _StudentHomeScreenContainerState extends State<StudentHomeScreenContainer> with WidgetsBindingObserver {
+class _AdminHomeScreenContainerState extends State<AdminHomeScreenContainer> with WidgetsBindingObserver {
   int _currentIndex = 0;
   final firebase.FirebaseAuth _firebaseAuth = firebase.FirebaseAuth.instance;
   final SupabaseClient _supabase = Supabase.instance.client;
@@ -148,48 +151,74 @@ class _StudentHomeScreenContainerState extends State<StudentHomeScreenContainer>
     }
   }
 
+  Future<void> _signOut() async {
+    try {
+      // Set user offline before signing out
+      await _updateOnlineStatus(false);
+
+      // Sign out from Firebase
+      await _firebaseAuth.signOut();
+
+      // Navigate to sign in screen
+      if (mounted) {
+        Navigator.pushReplacementNamed(context, '/signin');
+      }
+    } catch (e) {
+      print('Error signing out: $e');
+      Fluttertoast.showToast(
+        msg: "Error signing out: $e",
+        toastLength: Toast.LENGTH_LONG,
+        gravity: ToastGravity.BOTTOM,
+        backgroundColor: Colors.red,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Create screens list with navigation callback for the home screen
+    // Reordered as: Dashboard, Statistics, Counselors, Chats, Appointments
     final List<Widget> screens = [
-      StudentHomeScreen(onNavigate: _navigateToTab),
-      const StudentChatScreen(),
-      const StudentAppointmentsScreen(),
-      const StudentProfileScreen(),
+      AdminHomeScreen(onNavigate: _navigateToTab),
+      const AdminStatisticsScreen(),
+      const AdminCounselorsScreen(),
+      const AdminChatHistoriesScreen(),
+      const AdminAppointmentsScreen(),
     ];
 
     return Scaffold(
-      // AppBar removed from here - each screen will have its own AppBar
       body: screens[_currentIndex],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: _navigateToTab,
         type: BottomNavigationBarType.fixed,
-        backgroundColor: Colors.white,
-        selectedItemColor: AppColors.primary,
+        selectedItemColor: AppColors.adminColor,
         unselectedItemColor: Colors.grey,
-        selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
-        unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
         items: const [
           BottomNavigationBarItem(
-            icon: Icon(Icons.home_outlined),
-            activeIcon: Icon(Icons.home),
-            label: 'Home',
+            icon: Icon(Icons.dashboard_outlined),
+            activeIcon: Icon(Icons.dashboard),
+            label: 'Dashboard',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.chat_bubble_outline),
-            activeIcon: Icon(Icons.chat_bubble),
-            label: 'Chat',
+            icon: Icon(Icons.bar_chart_outlined),
+            activeIcon: Icon(Icons.bar_chart),
+            label: 'Statistics',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.people_outline),
+            activeIcon: Icon(Icons.people),
+            label: 'Counselors',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.chat_outlined),
+            activeIcon: Icon(Icons.chat),
+            label: 'Chats',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.calendar_today_outlined),
             activeIcon: Icon(Icons.calendar_today),
             label: 'Appointments',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person_outline),
-            activeIcon: Icon(Icons.person),
-            label: 'Profile',
           ),
         ],
       ),

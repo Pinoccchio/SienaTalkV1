@@ -23,6 +23,8 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
   List<Map<String, dynamic>> _upcomingAppointments = [];
   List<Map<String, dynamic>> _pastAppointments = [];
   List<Map<String, dynamic>> _counselors = [];
+  bool _isAnonymousMode = false;
+  Map<String, dynamic>? _userProfile;
 
   // For appointment creation
   Map<String, dynamic>? _selectedCounselor;
@@ -32,13 +34,124 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
   final TextEditingController _descriptionController = TextEditingController();
   bool _isSubmitting = false;
 
+  // For counselor availability
+  Map<String, List<TimeSlot>> _counselorAvailability = {};
+  String _selectedDay = '';
+  List<TimeSlot> _availableTimeSlots = [];
+  RealtimeChannel? _appointmentsChannel;
+  bool _isMounted = true;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _currentUserId = _firebaseAuth.currentUser?.uid;
     _ensureSelectedDateIsValid();
+    _loadUserProfile();
     _loadData();
+    _setupRealtimeSubscription();
+  }
+
+  void _setupRealtimeSubscription() {
+    if (_currentUserId == null) return;
+
+    // Subscribe to changes in appointments table
+    _appointmentsChannel = _supabase
+        .channel('public:appointments:student')
+        .onPostgresChanges(
+      event: PostgresChangeEvent.insert,
+      schema: 'public',
+      table: 'appointments',
+      callback: (payload) {
+        if (_isMounted && payload.newRecord?['student_id'] == _currentUserId) {
+          _loadData();
+        }
+      },
+    )
+        .onPostgresChanges(
+      event: PostgresChangeEvent.update,
+      schema: 'public',
+      table: 'appointments',
+      callback: (payload) {
+        if (_isMounted &&
+            (payload.oldRecord?['student_id'] == _currentUserId ||
+                payload.newRecord?['student_id'] == _currentUserId)) {
+          _loadData();
+        }
+      },
+    )
+        .onPostgresChanges(
+      event: PostgresChangeEvent.delete,
+      schema: 'public',
+      table: 'appointments',
+      callback: (payload) {
+        if (_isMounted && payload.oldRecord?['student_id'] == _currentUserId) {
+          _loadData();
+        }
+      },
+    )
+        .subscribe();
+  }
+
+  Future<void> _loadUserProfile() async {
+    final userId = _firebaseAuth.currentUser?.uid;
+    if (userId == null) return;
+
+    try {
+      final data = await _supabase
+          .from('user_profiles')
+          .select('*')
+          .eq('user_id', userId)
+          .single();
+
+      if (mounted) {
+        setState(() {
+          _userProfile = data;
+          _isAnonymousMode = data['is_anonymous'] ?? false;
+        });
+      }
+    } catch (e) {
+      print('Error loading user profile: $e');
+    }
+  }
+
+  Future<void> _toggleAnonymousMode() async {
+    final userId = _firebaseAuth.currentUser?.uid;
+    if (userId == null) return;
+
+    try {
+      // Update the user profile
+      await _supabase
+          .from('user_profiles')
+          .update({'is_anonymous': !_isAnonymousMode})
+          .eq('user_id', userId);
+
+      if (mounted) {
+        setState(() {
+          _isAnonymousMode = !_isAnonymousMode;
+          if (_userProfile != null) {
+            _userProfile!['is_anonymous'] = _isAnonymousMode;
+          }
+        });
+      }
+
+      Fluttertoast.showToast(
+        msg: _isAnonymousMode
+            ? "Anonymous mode enabled"
+            : "Anonymous mode disabled",
+        toastLength: Toast.LENGTH_SHORT,
+        gravity: ToastGravity.BOTTOM,
+        backgroundColor: AppColors.primary,
+      );
+    } catch (e) {
+      print('Error toggling anonymous mode: $e');
+      Fluttertoast.showToast(
+        msg: "Error changing anonymous mode",
+        toastLength: Toast.LENGTH_SHORT,
+        gravity: ToastGravity.BOTTOM,
+        backgroundColor: Colors.red,
+      );
+    }
   }
 
   void _ensureSelectedDateIsValid() {
@@ -49,13 +162,20 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
     if (_selectedDate.isBefore(startDate)) {
       _selectedDate = startDate.add(const Duration(days: 1));
     }
+
+    // Set the selected day based on the date
+    _selectedDay = DateFormat('EEEE').format(_selectedDate);
   }
 
   @override
   void dispose() {
+    _isMounted = false;
     _tabController.dispose();
     _titleController.dispose();
     _descriptionController.dispose();
+    if (_appointmentsChannel != null) {
+      _appointmentsChannel!.unsubscribe();
+    }
     super.dispose();
   }
 
@@ -104,7 +224,14 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
 
       for (final appointment in appointmentsData) {
         final appointmentDate = DateTime.parse(appointment['appointment_date']);
-        if (appointmentDate.isAfter(now) ||
+        final status = appointment['status'] as String? ?? 'pending';
+
+        // Always put completed and cancelled appointments in past
+        if (status == 'completed' || status == 'cancelled') {
+          past.add(appointment);
+        }
+        // For other statuses, check the date
+        else if (appointmentDate.isAfter(now) ||
             (appointmentDate.day == now.day &&
                 appointmentDate.month == now.month &&
                 appointmentDate.year == now.year)) {
@@ -113,6 +240,16 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
           past.add(appointment);
         }
       }
+
+      // Sort past appointments by date (most recent first)
+      past.sort((a, b) =>
+          DateTime.parse(b['appointment_date']).compareTo(DateTime.parse(a['appointment_date']))
+      );
+
+      // Sort upcoming appointments by date (earliest first)
+      upcoming.sort((a, b) =>
+          DateTime.parse(a['appointment_date']).compareTo(DateTime.parse(b['appointment_date']))
+      );
 
       if (mounted) {
         setState(() {
@@ -137,6 +274,75 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
     }
   }
 
+  Future<void> _loadCounselorAvailability(String counselorId) async {
+    try {
+      // Reset availability
+      _counselorAvailability = {};
+      for (var day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']) {
+        _counselorAvailability[day] = [];
+      }
+
+      // Load availability slots from the database
+      final availabilityData = await _supabase
+          .from('counselor_availability')
+          .select('*')
+          .eq('counselor_id', counselorId);
+
+      // Populate availability map from database data
+      for (var slot in availabilityData) {
+        final day = slot['day_of_week'];
+        final startTime = TimeOfDay(
+          hour: int.parse(slot['start_time'].split(':')[0]),
+          minute: int.parse(slot['start_time'].split(':')[1]),
+        );
+        final endTime = TimeOfDay(
+          hour: int.parse(slot['end_time'].split(':')[0]),
+          minute: int.parse(slot['end_time'].split(':')[1]),
+        );
+
+        if (_counselorAvailability.containsKey(day)) {
+          _counselorAvailability[day]!.add(TimeSlot(startTime, endTime));
+        }
+      }
+
+      // Update available time slots for the selected day
+      _updateAvailableTimeSlots();
+
+      if (availabilityData.isEmpty) {
+        Fluttertoast.showToast(
+          msg: "This counselor has not set their availability yet",
+          backgroundColor: Colors.orange,
+        );
+      }
+    } catch (e) {
+      print('Error loading counselor availability: $e');
+      Fluttertoast.showToast(
+        msg: "Failed to load counselor availability",
+        backgroundColor: Colors.red,
+      );
+    }
+  }
+
+  void _updateAvailableTimeSlots() {
+    _availableTimeSlots = _counselorAvailability[_selectedDay] ?? [];
+
+    // Sort time slots by start time
+    _availableTimeSlots.sort((a, b) {
+      final aMinutes = a.startTime.hour * 60 + a.startTime.minute;
+      final bMinutes = b.startTime.hour * 60 + b.startTime.minute;
+      return aMinutes.compareTo(bMinutes);
+    });
+  }
+
+  // Helper method to check if a time slot is selected
+  bool _isSelectedTimeSlot(TimeSlot slot) {
+    final selectedMinutes = _selectedTime.hour * 60 + _selectedTime.minute;
+    final slotStartMinutes = slot.startTime.hour * 60 + slot.startTime.minute;
+    final slotEndMinutes = slot.endTime.hour * 60 + slot.endTime.minute;
+
+    return selectedMinutes >= slotStartMinutes && selectedMinutes < slotEndMinutes;
+  }
+
   Future<void> _createAppointment() async {
     if (_currentUserId == null || _selectedCounselor == null) return;
 
@@ -149,6 +355,24 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
         backgroundColor: Colors.red,
       );
       return;
+    }
+
+    // Check if the selected time is within the counselor's availability
+    bool isTimeAvailable = false;
+    for (var slot in _availableTimeSlots) {
+      final slotStartMinutes = slot.startTime.hour * 60 + slot.startTime.minute;
+      final slotEndMinutes = slot.endTime.hour * 60 + slot.endTime.minute;
+      final selectedMinutes = _selectedTime.hour * 60 + _selectedTime.minute;
+
+      if (selectedMinutes >= slotStartMinutes && selectedMinutes < slotEndMinutes) {
+        isTimeAvailable = true;
+        break;
+      }
+    }
+
+    if (!isTimeAvailable && _availableTimeSlots.isNotEmpty) {
+      final bool confirmed = await _showTimeNotAvailableDialog();
+      if (!confirmed) return;
     }
 
     // Show confirmation dialog
@@ -173,6 +397,7 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
         'description': description,
         'appointment_date': appointmentDateTime,
         'status': 'pending',
+        'is_anonymous': _isAnonymousMode, // Add anonymous flag
       };
 
       final response = await _supabase
@@ -230,6 +455,45 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
     }
   }
 
+  Future<bool> _showTimeNotAvailableDialog() async {
+    return await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Time Not Available'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('The selected time is outside the counselor\'s availability hours.'),
+            const SizedBox(height: 16),
+            const Text('Available time slots:', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            ..._availableTimeSlots.map((slot) => Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text('• ${slot.toString()}'),
+            )).toList(),
+            const SizedBox(height: 16),
+            const Text('Would you like to schedule anyway? The counselor may need to reschedule.'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Schedule Anyway'),
+          ),
+        ],
+      ),
+    ) ?? false;
+  }
+
   Future<bool> _showScheduleConfirmationDialog() async {
     if (_selectedCounselor == null) return false;
 
@@ -252,6 +516,14 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
             Text('Date: $formattedDate', style: const TextStyle(fontWeight: FontWeight.bold)),
             Text('Time: $formattedTime', style: const TextStyle(fontWeight: FontWeight.bold)),
             Text('Title: $title', style: const TextStyle(fontWeight: FontWeight.bold)),
+            if (_isAnonymousMode)
+              const Text(
+                'This appointment will be anonymous',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.red,
+                ),
+              ),
           ],
         ),
         actions: [
@@ -291,6 +563,15 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
         for (final appointment in _upcomingAppointments) {
           if (appointment['id'] == appointmentId) {
             appointment['status'] = 'cancelled';
+
+            // Move to past appointments if cancelled
+            _pastAppointments.add(appointment);
+            _upcomingAppointments.removeWhere((a) => a['id'] == appointmentId);
+
+            // Sort past appointments by date (most recent first)
+            _pastAppointments.sort((a, b) =>
+                DateTime.parse(b['appointment_date']).compareTo(DateTime.parse(a['appointment_date']))
+            );
             break;
           }
         }
@@ -367,6 +648,8 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
   void _showScheduleDialog() {
     // Reset the selected counselor to ensure dropdown works correctly
     _selectedCounselor = null;
+    _counselorAvailability = {};
+    _availableTimeSlots = [];
 
     // Ensure selected date is valid
     _ensureSelectedDateIsValid();
@@ -382,6 +665,21 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Anonymous mode toggle
+                  SwitchListTile(
+                    title: const Text('Anonymous Appointment',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: const Text('Hide your identity from the counselor'),
+                    value: _isAnonymousMode,
+                    activeColor: AppColors.primary,
+                    onChanged: (value) {
+                      setDialogState(() {
+                        _isAnonymousMode = value;
+                      });
+                    },
+                  ),
+                  const Divider(),
+
                   // Counselor selection
                   const Text('Select Counselor', style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
@@ -412,6 +710,15 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
                       onChanged: (value) {
                         setDialogState(() {
                           _selectedCounselor = value;
+                          if (value != null) {
+                            // Load counselor availability when selected
+                            _loadCounselorAvailability(value['user_id']).then((_) {
+                              setDialogState(() {
+                                // Update available time slots
+                                _updateAvailableTimeSlots();
+                              });
+                            });
+                          }
                         });
                       },
                     ),
@@ -438,6 +745,9 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
                       if (pickedDate != null) {
                         setDialogState(() {
                           _selectedDate = pickedDate;
+                          // Update selected day and available time slots
+                          _selectedDay = DateFormat('EEEE').format(_selectedDate);
+                          _updateAvailableTimeSlots();
                         });
                       }
                     },
@@ -458,6 +768,90 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
                   ),
 
                   const SizedBox(height: 16),
+
+                  // Available time slots
+                  if (_selectedCounselor != null) ...[
+                    const Text('Counselor Availability', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+
+                    if (_availableTimeSlots.isEmpty)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Text(
+                          'No availability set for this day',
+                          style: TextStyle(
+                            fontStyle: FontStyle.italic,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      )
+                    else
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Available times on $_selectedDay:',
+                              style: const TextStyle(fontWeight: FontWeight.w500),
+                            ),
+                            const SizedBox(height: 8),
+                            ...List.generate(_availableTimeSlots.length, (index) {
+                              return InkWell(
+                                onTap: () {
+                                  setDialogState(() {
+                                    _selectedTime = _availableTimeSlots[index].startTime;
+                                  });
+                                },
+                                child: Container(
+                                  margin: const EdgeInsets.only(bottom: 4),
+                                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                                  decoration: BoxDecoration(
+                                    color: _isSelectedTimeSlot(_availableTimeSlots[index])
+                                        ? AppColors.primary.withOpacity(0.1)
+                                        : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: _isSelectedTimeSlot(_availableTimeSlots[index])
+                                        ? Border.all(color: AppColors.primary)
+                                        : null,
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (_isSelectedTimeSlot(_availableTimeSlots[index]))
+                                        const Icon(Icons.check_circle, size: 14, color: AppColors.primary),
+                                      if (_isSelectedTimeSlot(_availableTimeSlots[index]))
+                                        const SizedBox(width: 4),
+                                      Text(
+                                        _availableTimeSlots[index].toString(),
+                                        style: TextStyle(
+                                          fontWeight: _isSelectedTimeSlot(_availableTimeSlots[index])
+                                              ? FontWeight.bold
+                                              : FontWeight.normal,
+                                          color: _isSelectedTimeSlot(_availableTimeSlots[index])
+                                              ? AppColors.primary
+                                              : Colors.black,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }),
+                          ],
+                        ),
+                      ),
+
+                    const SizedBox(height: 16),
+                  ],
 
                   // Time selection
                   const Text('Select Time', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -573,6 +967,20 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
 
     _selectedTime = TimeOfDay(hour: appointmentDate.hour, minute: appointmentDate.minute);
 
+    // Update selected day based on the date
+    _selectedDay = DateFormat('EEEE').format(_selectedDate);
+
+    // Reset availability data
+    _counselorAvailability = {};
+    _availableTimeSlots = [];
+
+    // Load counselor availability
+    if (appointment['counselor_id'] != null) {
+      _loadCounselorAvailability(appointment['counselor_id']).then((_) {
+        _updateAvailableTimeSlots();
+      });
+    }
+
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -603,6 +1011,9 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
                       if (pickedDate != null) {
                         setDialogState(() {
                           _selectedDate = pickedDate;
+                          // Update selected day and available time slots
+                          _selectedDay = DateFormat('EEEE').format(_selectedDate);
+                          _updateAvailableTimeSlots();
                         });
                       }
                     },
@@ -621,6 +1032,88 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
                       ),
                     ),
                   ),
+
+                  const SizedBox(height: 16),
+
+                  // Available time slots
+                  const Text('Counselor Availability', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+
+                  if (_availableTimeSlots.isEmpty)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text(
+                        'No availability set for this day',
+                        style: TextStyle(
+                          fontStyle: FontStyle.italic,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Available times on $_selectedDay:',
+                            style: const TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          const SizedBox(height: 8),
+                          ...List.generate(_availableTimeSlots.length, (index) {
+                            return InkWell(
+                              onTap: () {
+                                setDialogState(() {
+                                  _selectedTime = _availableTimeSlots[index].startTime;
+                                });
+                              },
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 4),
+                                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                                decoration: BoxDecoration(
+                                  color: _isSelectedTimeSlot(_availableTimeSlots[index])
+                                      ? AppColors.primary.withOpacity(0.1)
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: _isSelectedTimeSlot(_availableTimeSlots[index])
+                                      ? Border.all(color: AppColors.primary)
+                                      : null,
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (_isSelectedTimeSlot(_availableTimeSlots[index]))
+                                      const Icon(Icons.check_circle, size: 14, color: AppColors.primary),
+                                    if (_isSelectedTimeSlot(_availableTimeSlots[index]))
+                                      const SizedBox(width: 4),
+                                    Text(
+                                      _availableTimeSlots[index].toString(),
+                                      style: TextStyle(
+                                        fontWeight: _isSelectedTimeSlot(_availableTimeSlots[index])
+                                            ? FontWeight.bold
+                                            : FontWeight.normal,
+                                        color: _isSelectedTimeSlot(_availableTimeSlots[index])
+                                            ? AppColors.primary
+                                            : Colors.black,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
 
                   const SizedBox(height: 16),
 
@@ -665,6 +1158,24 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
               ),
               ElevatedButton(
                 onPressed: () async {
+                  // Check if the selected time is within the counselor's availability
+                  bool isTimeAvailable = false;
+                  for (var slot in _availableTimeSlots) {
+                    final slotStartMinutes = slot.startTime.hour * 60 + slot.startTime.minute;
+                    final slotEndMinutes = slot.endTime.hour * 60 + slot.endTime.minute;
+                    final selectedMinutes = _selectedTime.hour * 60 + _selectedTime.minute;
+
+                    if (selectedMinutes >= slotStartMinutes && selectedMinutes < slotEndMinutes) {
+                      isTimeAvailable = true;
+                      break;
+                    }
+                  }
+
+                  if (!isTimeAvailable && _availableTimeSlots.isNotEmpty) {
+                    final bool confirmed = await _showTimeNotAvailableDialog();
+                    if (!confirmed) return;
+                  }
+
                   // Show confirmation dialog
                   final bool confirmed = await _showRescheduleConfirmationDialog(appointment);
                   if (!confirmed) return;
@@ -737,6 +1248,7 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
     final formattedDate = DateFormat('EEEE, MMMM d, yyyy').format(_selectedDate);
     final formattedTime = _selectedTime.format(context);
     final title = appointment['title'] ?? 'Counseling Session';
+    final isAnonymous = appointment['is_anonymous'] ?? false;
 
     return await showDialog<bool>(
       context: context,
@@ -752,6 +1264,14 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
             Text('New Date: $formattedDate', style: const TextStyle(fontWeight: FontWeight.bold)),
             Text('New Time: $formattedTime', style: const TextStyle(fontWeight: FontWeight.bold)),
             Text('Title: $title', style: const TextStyle(fontWeight: FontWeight.bold)),
+            if (isAnonymous)
+              const Text(
+                'This is an anonymous appointment',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.red,
+                ),
+              ),
           ],
         ),
         actions: [
@@ -786,11 +1306,19 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
         backgroundColor: AppColors.primary,
         elevation: 0,
         actions: [
+          // Anonymous mode toggle
           IconButton(
-            icon: const Icon(Icons.notifications_outlined, color: Colors.white),
-            onPressed: () {
-              // TODO: Navigate to notifications screen
-            },
+            icon: Icon(
+              _isAnonymousMode ? Icons.visibility_off : Icons.visibility,
+              color: Colors.white,
+            ),
+            onPressed: _toggleAnonymousMode,
+            tooltip: _isAnonymousMode ? 'Disable Anonymous Mode' : 'Enable Anonymous Mode',
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.white),
+            onPressed: _loadData,
+            tooltip: 'Refresh Appointments',
           ),
         ],
         bottom: TabBar(
@@ -806,21 +1334,58 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
           ],
         ),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : TabBarView(
-        controller: _tabController,
+      body: Column(
         children: [
-          // Upcoming appointments
-          _buildAppointmentsList(
-            appointments: _upcomingAppointments,
-            isUpcoming: true,
-          ),
+          // Anonymous mode banner
+          if (_isAnonymousMode)
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+              color: Colors.grey.shade800,
+              child: Row(
+                children: [
+                  const Icon(Icons.visibility_off, color: Colors.white, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Anonymous mode is enabled. Your identity will be hidden from counselors.',
+                      style: TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _toggleAnonymousMode,
+                    child: const Text(
+                      'Disable',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: const Size(0, 0),
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
-          // Past appointments
-          _buildAppointmentsList(
-            appointments: _pastAppointments,
-            isUpcoming: false,
+          // Tab content
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : TabBarView(
+              controller: _tabController,
+              children: [
+                // Upcoming appointments
+                _buildAppointmentsList(
+                  appointments: _upcomingAppointments,
+                  isUpcoming: true,
+                ),
+
+                // Past appointments
+                _buildAppointmentsList(
+                  appointments: _pastAppointments,
+                  isUpcoming: false,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -888,6 +1453,7 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
           time: DateFormat('h:mm a').format(appointmentDate),
           status: appointment['status'] ?? 'pending',
           isUpcoming: isUpcoming,
+          isAnonymous: appointment['is_anonymous'] ?? false,
         );
       },
     );
@@ -900,6 +1466,7 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
     required String time,
     required String status,
     required bool isUpcoming,
+    required bool isAnonymous,
   }) {
     final statusColor = _getStatusColor(status);
     final appointmentDate = DateTime.parse(appointment['appointment_date']);
@@ -931,9 +1498,12 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
           children: [
             Row(
               children: [
-                const CircleAvatar(
-                  backgroundColor: AppColors.counselorColor,
-                  child: Icon(Icons.person, color: Colors.white),
+                CircleAvatar(
+                  backgroundColor: isAnonymous ? Colors.grey.shade800 : AppColors.counselorColor,
+                  child: Icon(
+                      isAnonymous ? Icons.visibility_off : Icons.person,
+                      color: Colors.white
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -954,6 +1524,21 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
                           fontSize: 14,
                         ),
                       ),
+                      if (isAnonymous)
+                        Row(
+                          children: [
+                            Icon(Icons.visibility_off, size: 12, color: Colors.grey.shade600),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Anonymous appointment',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
+                        ),
                     ],
                   ),
                 ),
@@ -1040,6 +1625,33 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
               ),
             ],
 
+            // Show counselor notes for completed appointments
+            if (!isUpcoming && status == 'completed' &&
+                appointment['counselor_notes'] != null &&
+                appointment['counselor_notes'].toString().isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Divider(),
+              const SizedBox(height: 8),
+              Text(
+                'Counselor notes:',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey.shade600,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                appointment['counselor_notes'],
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey.shade800,
+                ),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+
             if (isUpcoming && (status == 'pending' || status == 'confirmed' || status == 'rescheduled'))
               Padding(
                 padding: const EdgeInsets.only(top: 16),
@@ -1101,5 +1713,26 @@ class _StudentAppointmentsScreenState extends State<StudentAppointmentsScreen> w
   String _formatStatus(String status) {
     // Capitalize first letter
     return status.substring(0, 1).toUpperCase() + status.substring(1);
+  }
+}
+
+// TimeSlot class to represent a time range
+class TimeSlot {
+  final TimeOfDay startTime;
+  final TimeOfDay endTime;
+
+  TimeSlot(this.startTime, this.endTime);
+
+  @override
+  String toString() {
+    return '${_formatTimeOfDay(startTime)} - ${_formatTimeOfDay(endTime)}';
+  }
+
+  String _formatTimeOfDay(TimeOfDay time) {
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    final period = time.hour < 12 ? 'AM' : 'PM';
+    final displayHour = time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
+    return '$displayHour:${minute.padLeft(2, '0')} $period';
   }
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:sienatalk/screens/admin/admin_home_screen_container.dart';
 import 'package:sienatalk/screens/counselor/counselor_container.dart';
 import 'package:sienatalk/screens/student/student_home_screen_container.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -87,7 +88,7 @@ class SienaTalkApp extends StatelessWidget {
           '/forgot_password': (context) => const ForgotPasswordScreen(),
           '/student_home': (context) => const StudentHomeScreenContainer(),
           '/counselor_home': (context) => const Scaffold(body: Center(child: Text('Counselor Home'))), // Placeholder
-          '/admin_home': (context) => const Scaffold(body: Center(child: Text('Admin Home'))), // Placeholder
+          '/admin_home': (context) => const AdminHomeScreenContainer(),
           '/counselor_home': (context) => const CounselorContainer(),
 
         },

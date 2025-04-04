@@ -5,16 +5,16 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import '../../utils/app_colors.dart';
-import 'student_chat_detail_screen.dart';
+import 'counselor_chat_detail_screen.dart';
 
-class StudentChatScreen extends StatefulWidget {
-  const StudentChatScreen({Key? key}) : super(key: key);
+class CounselorChatScreen extends StatefulWidget {
+  const CounselorChatScreen({Key? key}) : super(key: key);
 
   @override
-  State<StudentChatScreen> createState() => _StudentChatScreenState();
+  State<CounselorChatScreen> createState() => _CounselorChatScreenState();
 }
 
-class _StudentChatScreenState extends State<StudentChatScreen> with SingleTickerProviderStateMixin {
+class _CounselorChatScreenState extends State<CounselorChatScreen> with SingleTickerProviderStateMixin {
   final firebase.FirebaseAuth _firebaseAuth = firebase.FirebaseAuth.instance;
   final SupabaseClient _supabase = Supabase.instance.client;
 
@@ -22,11 +22,8 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
   bool _showOnlyActive = false;
   String _searchQuery = '';
   List<Map<String, dynamic>> _conversations = [];
-  List<Map<String, dynamic>> _allCounselors = []; // Store all counselors
   final TextEditingController _searchController = TextEditingController();
   List<RealtimeChannel> _channels = [];
-  bool _isAnonymousMode = false;
-  Map<String, dynamic>? _userProfile;
   String? _currentUserId;
 
   // Flag to track if the widget is still mounted
@@ -40,7 +37,6 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
   void initState() {
     super.initState();
     _currentUserId = _firebaseAuth.currentUser?.uid;
-    _loadUserProfile();
     _loadConversations();
     _setupRealtimeSubscription();
 
@@ -71,67 +67,6 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
     super.dispose();
   }
 
-  Future<void> _loadUserProfile() async {
-    final userId = _firebaseAuth.currentUser?.uid;
-    if (userId == null) return;
-
-    try {
-      final data = await _supabase
-          .from('user_profiles')
-          .select('*')
-          .eq('user_id', userId)
-          .single();
-
-      if (!_isMounted) return;
-
-      setState(() {
-        _userProfile = data;
-        _isAnonymousMode = data['is_anonymous'] ?? false;
-      });
-    } catch (e) {
-      print('Error loading user profile: $e');
-    }
-  }
-
-  Future<void> _toggleAnonymousMode() async {
-    final userId = _firebaseAuth.currentUser?.uid;
-    if (userId == null) return;
-
-    try {
-      // Update the user profile
-      await _supabase
-          .from('user_profiles')
-          .update({'is_anonymous': !_isAnonymousMode})
-          .eq('user_id', userId);
-
-      if (!_isMounted) return;
-
-      setState(() {
-        _isAnonymousMode = !_isAnonymousMode;
-        if (_userProfile != null) {
-          _userProfile!['is_anonymous'] = _isAnonymousMode;
-        }
-      });
-
-      Fluttertoast.showToast(
-        msg: _isAnonymousMode
-            ? "Anonymous mode enabled"
-            : "Anonymous mode disabled",
-        toastLength: Toast.LENGTH_SHORT,
-        gravity: ToastGravity.BOTTOM,
-        backgroundColor: AppColors.primary,
-      );
-    } catch (e) {
-      print('Error toggling anonymous mode: $e');
-      Fluttertoast.showToast(
-        msg: "Error changing anonymous mode",
-        toastLength: Toast.LENGTH_SHORT,
-        gravity: ToastGravity.BOTTOM,
-        backgroundColor: Colors.red,
-      );
-    }
-  }
-
   void _setupRealtimeSubscription() {
     // Subscribe to changes in user_profiles table to update online status in real-time
     final profilesChannel = _supabase.channel('public:user_profiles');
@@ -141,18 +76,9 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
       schema: 'public',
       table: 'user_profiles',
       callback: (payload) {
-        // When a user's online status changes, refresh the counselor list
+        // When a user's online status changes, refresh the student list
         if (_isMounted) {
           _loadConversations();
-
-          // If it's the current user's profile that changed, update the local state
-          final userId = _firebaseAuth.currentUser?.uid;
-          if (userId != null && payload.newRecord != null && payload.newRecord!['user_id'] == userId) {
-            setState(() {
-              _userProfile = payload.newRecord;
-              _isAnonymousMode = payload.newRecord!['is_anonymous'] ?? false;
-            });
-          }
         }
       },
     )
@@ -190,22 +116,11 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
     });
 
     try {
-      // Fetch all counselors
-      final counselorsData = await _supabase
-          .from('user_profiles')
-          .select('*')
-          .eq('user_type', 'counselor')
-          .order('full_name');
-
-      if (!_isMounted) return;
-
-      // Store all counselors
-      _allCounselors = List<Map<String, dynamic>>.from(counselorsData);
-
-      // Get all messages between student and counselors
+      // Fetch all students who have messaged with this counselor
       final currentUserId = _firebaseAuth.currentUser?.uid;
       if (currentUserId == null) return;
 
+      // Get all messages between counselor and students
       final messagesData = await _supabase
           .from('messages')
           .select('*')
@@ -216,16 +131,16 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
       Map<String, List<Map<String, dynamic>>> conversationGroups = {};
 
       for (var message in messagesData) {
-        String counselorId;
+        String studentId;
         if (message['sender_id'] == currentUserId) {
-          counselorId = message['receiver_id'];
+          studentId = message['receiver_id'];
         } else {
-          counselorId = message['sender_id'];
+          studentId = message['sender_id'];
         }
 
         // Create a unique conversation ID that includes anonymity status
         bool isAnonymous = message['is_anonymous'] == true;
-        String conversationKey = '$counselorId:${isAnonymous ? 'anonymous' : 'regular'}';
+        String conversationKey = '$studentId:${isAnonymous ? 'anonymous' : 'regular'}';
 
         if (!conversationGroups.containsKey(conversationKey)) {
           conversationGroups[conversationKey] = [];
@@ -237,7 +152,6 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
       // Create conversation list with the most recent message for each conversation
       List<Map<String, dynamic>> conversations = [];
 
-      // First, add all existing conversations
       for (var entry in conversationGroups.entries) {
         // Sort messages by date (newest first)
         entry.value.sort((a, b) =>
@@ -247,107 +161,37 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
         // Get the most recent message
         var recentMessage = entry.value.first;
 
-        // Extract counselor ID and anonymity from the conversation key
-        String counselorId = entry.key.split(':')[0];
+        // Extract student ID and anonymity from the conversation key
+        String studentId = entry.key.split(':')[0];
         bool isAnonymous = entry.key.split(':')[1] == 'anonymous';
 
-        // Find the counselor in the counselors list
-        final counselor = _allCounselors.firstWhere(
-              (c) => c['user_id'] == counselorId,
-          orElse: () => {'user_id': counselorId, 'full_name': 'Unknown Counselor', 'is_online': false},
-        );
+        try {
+          // Fetch student profile
+          final studentData = await _supabase
+              .from('user_profiles')
+              .select('*')
+              .eq('user_id', studentId)
+              .eq('user_type', 'student')
+              .single();
 
-        // Count unread messages (only those sent by the counselor to the student)
-        int unreadCount = entry.value.where((msg) =>
-        msg['sender_id'] == counselorId &&
-            msg['receiver_id'] == currentUserId &&
-            !(msg['is_read'] ?? true)
-        ).length;
+          // Count unread messages (only those sent by the student to the counselor)
+          int unreadCount = entry.value.where((msg) =>
+          msg['sender_id'] == studentId &&
+              msg['receiver_id'] == currentUserId &&
+              !(msg['is_read'] ?? true)
+          ).length;
 
-        // Create conversation object
-        Map<String, dynamic> conversation = {
-          'counselor': counselor,
-          'recent_message': recentMessage,
-          'is_anonymous': isAnonymous,
-          'unread_count': unreadCount,
-          'has_conversation': true,
-          'conversation_key': entry.key, // Store the conversation key for reference
-        };
-
-        conversations.add(conversation);
-      }
-
-      // Track which counselors already have conversations (both regular and anonymous)
-      Map<String, Set<String>> counselorConversationTypes = {};
-
-      for (var convo in conversations) {
-        String counselorId = convo['counselor']['user_id'];
-        bool isAnonymous = convo['is_anonymous'];
-
-        if (!counselorConversationTypes.containsKey(counselorId)) {
-          counselorConversationTypes[counselorId] = {};
-        }
-
-        counselorConversationTypes[counselorId]!.add(isAnonymous ? 'anonymous' : 'regular');
-      }
-
-      // Then add counselors that don't have any conversations yet
-      for (var counselor in _allCounselors) {
-        String counselorId = counselor['user_id'];
-
-        // If counselor doesn't have any conversations, add both regular and anonymous options
-        if (!counselorConversationTypes.containsKey(counselorId)) {
-          // Add regular conversation option
-          Map<String, dynamic> regularConversation = {
-            'counselor': counselor,
-            'recent_message': null,
-            'is_anonymous': false,
-            'unread_count': 0,
-            'has_conversation': false,
-            'conversation_key': '$counselorId:regular',
+          // Create conversation object
+          Map<String, dynamic> conversation = {
+            'student': studentData,
+            'recent_message': recentMessage,
+            'is_anonymous': isAnonymous,
+            'unread_count': unreadCount,
           };
-          conversations.add(regularConversation);
 
-          // Add anonymous conversation option
-          Map<String, dynamic> anonymousConversation = {
-            'counselor': counselor,
-            'recent_message': null,
-            'is_anonymous': true,
-            'unread_count': 0,
-            'has_conversation': false,
-            'conversation_key': '$counselorId:anonymous',
-          };
-          conversations.add(anonymousConversation);
-        }
-        // If counselor has only one type of conversation, add the other type
-        else {
-          Set<String> existingTypes = counselorConversationTypes[counselorId]!;
-
-          // Add regular conversation option if it doesn't exist
-          if (!existingTypes.contains('regular')) {
-            Map<String, dynamic> regularConversation = {
-              'counselor': counselor,
-              'recent_message': null,
-              'is_anonymous': false,
-              'unread_count': 0,
-              'has_conversation': false,
-              'conversation_key': '$counselorId:regular',
-            };
-            conversations.add(regularConversation);
-          }
-
-          // Add anonymous conversation option if it doesn't exist
-          if (!existingTypes.contains('anonymous')) {
-            Map<String, dynamic> anonymousConversation = {
-              'counselor': counselor,
-              'recent_message': null,
-              'is_anonymous': true,
-              'unread_count': 0,
-              'has_conversation': false,
-              'conversation_key': '$counselorId:anonymous',
-            };
-            conversations.add(anonymousConversation);
-          }
+          conversations.add(conversation);
+        } catch (e) {
+          print('Error fetching student profile: $e');
         }
       }
 
@@ -377,17 +221,25 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
 
   List<Map<String, dynamic>> _getFilteredConversations() {
     return _conversations.where((conversation) {
-      final counselor = conversation['counselor'];
+      final student = conversation['student'];
 
       // Filter by active status if needed
-      if (_showOnlyActive && !(counselor['is_online'] ?? false)) {
+      if (_showOnlyActive && !(student['is_online'] ?? false)) {
         return false;
       }
 
       // Filter by search query
       if (_searchQuery.isNotEmpty) {
-        final name = counselor['full_name'] ?? '';
-        return name.toLowerCase().contains(_searchQuery.toLowerCase());
+        final name = student['full_name'] ?? '';
+        final email = student['email'] ?? '';
+
+        // Don't search in anonymous conversations
+        if (conversation['is_anonymous']) {
+          return false;
+        }
+
+        return name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+            email.toLowerCase().contains(_searchQuery.toLowerCase());
       }
 
       return true;
@@ -395,25 +247,30 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
   }
 
   void _navigateToChatDetail(Map<String, dynamic> conversation) {
-    final counselor = conversation['counselor'];
+    final student = conversation['student'];
     final isAnonymous = conversation['is_anonymous'];
 
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => StudentChatDetailScreen(
-          recipientId: counselor['user_id'],
-          recipientName: counselor['full_name'] ?? 'Counselor',
-          isRecipientOnline: counselor['is_online'] ?? false,
-          isAnonymousMode: isAnonymous,
+        builder: (context) => CounselorChatDetailScreen(
+          studentId: student['user_id'],
+          studentName: isAnonymous ? 'Anonymous Student' : (student['full_name'] ?? 'Student'),
+          studentEmail: isAnonymous ? '' : (student['email'] ?? ''),
+          isAnonymousConversation: isAnonymous,
           conversationFilter: isAnonymous, // This ensures we only show messages matching this anonymity status
+          onMessageSent: () {
+            // Refresh data when returning from chat detail
+            if (_isMounted) {
+              _loadConversations();
+            }
+          },
         ),
       ),
     ).then((_) {
       // Refresh data when returning from chat detail
       if (_isMounted) {
         _loadConversations();
-        _loadUserProfile(); // Refresh anonymous mode status
       }
     });
   }
@@ -441,24 +298,27 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Chat',
+          'Messages',
           style: TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.bold,
           ),
         ),
-        backgroundColor: AppColors.primary,
+        backgroundColor: AppColors.counselorColor,
         elevation: 0,
         actions: [
-          // Anonymous mode toggle
-          IconButton(
-            icon: Icon(
-              _isAnonymousMode ? Icons.visibility_off : Icons.visibility,
-              color: Colors.white,
-            ),
-            onPressed: _toggleAnonymousMode,
-            tooltip: _isAnonymousMode ? 'Disable Anonymous Mode' : 'Enable Anonymous Mode',
-          ),
+          // Commented out notifications icon as requested
+          // IconButton(
+          //   icon: const Icon(Icons.notifications_outlined, color: Colors.white),
+          //   onPressed: () {
+          //     // TODO: Navigate to notifications screen
+          //     Fluttertoast.showToast(
+          //       msg: "Notifications feature coming soon!",
+          //       toastLength: Toast.LENGTH_SHORT,
+          //       gravity: ToastGravity.BOTTOM,
+          //     );
+          //   },
+          // ),
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),
             onPressed: _loadConversations,
@@ -468,36 +328,6 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Anonymous mode banner
-          if (_isAnonymousMode)
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-              color: Colors.grey.shade800,
-              child: Row(
-                children: [
-                  const Icon(Icons.visibility_off, color: Colors.white, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Anonymous mode is enabled. Your identity is hidden from counselors.',
-                      style: TextStyle(color: Colors.white, fontSize: 12),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: _toggleAnonymousMode,
-                    child: const Text(
-                      'Disable',
-                      style: TextStyle(color: Colors.white),
-                    ),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      minimumSize: const Size(0, 0),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
           // Search bar
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -517,7 +347,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
               child: TextField(
                 controller: _searchController,
                 decoration: InputDecoration(
-                  hintText: 'Search counselors',
+                  hintText: 'Search students',
                   hintStyle: TextStyle(color: Colors.grey.shade500),
                   border: InputBorder.none,
                   icon: Icon(Icons.search, color: Colors.grey.shade600),
@@ -569,11 +399,11 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                         width: (screenWidth - 32) / 2,
                         child: Container(
                           decoration: BoxDecoration(
-                            color: AppColors.primary,
+                            color: AppColors.counselorColor,
                             borderRadius: BorderRadius.circular(20),
                             boxShadow: [
                               BoxShadow(
-                                color: AppColors.primary.withOpacity(0.3),
+                                color: AppColors.counselorColor.withOpacity(0.3),
                                 blurRadius: 8,
                                 offset: const Offset(0, 2),
                               ),
@@ -629,7 +459,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
             child: _isLoading
                 ? Center(
               child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                valueColor: AlwaysStoppedAnimation<Color>(AppColors.counselorColor),
               ),
             )
                 : filteredConversations.isEmpty
@@ -645,8 +475,8 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                   const SizedBox(height: 16),
                   Text(
                     _showOnlyActive
-                        ? 'No active counselors found'
-                        : 'No counselors found',
+                        ? 'No active students found'
+                        : 'No students found',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w500,
@@ -656,7 +486,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                   const SizedBox(height: 8),
                   Text(
                     _showOnlyActive
-                        ? 'Try checking all counselors'
+                        ? 'Try checking all students'
                         : 'Try a different search term',
                     style: TextStyle(
                       fontSize: 14,
@@ -667,7 +497,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
               ),
             )
                 : RefreshIndicator(
-              color: AppColors.primary,
+              color: AppColors.counselorColor,
               onRefresh: _loadConversations,
               child: AnimationLimiter(
                 child: ListView.builder(
@@ -675,16 +505,13 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                   itemCount: filteredConversations.length,
                   itemBuilder: (context, index) {
                     final conversation = filteredConversations[index];
-                    final counselor = conversation['counselor'];
+                    final student = conversation['student'];
                     final recentMessage = conversation['recent_message'];
                     final isAnonymous = conversation['is_anonymous'];
                     final unreadCount = conversation['unread_count'] ?? 0;
-                    final hasConversation = conversation['has_conversation'] ?? false;
 
                     // Get message details
-                    String lastMessage = isAnonymous
-                        ? 'Start an anonymous conversation'
-                        : 'Start a conversation';
+                    String lastMessage = 'Start a conversation';
                     String time = '';
                     bool isVoiceMessage = false;
 
@@ -694,6 +521,11 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                       lastMessage = isVoiceMessage
                           ? '🎤 Voice message'
                           : (recentMessage['content'] ?? 'No message');
+
+                      // Add lock icon for anonymous messages
+                      if (isAnonymous) {
+                        lastMessage = '🔒 ' + lastMessage;
+                      }
 
                       // Format time
                       final createdAt = DateTime.parse(recentMessage['created_at']);
@@ -719,14 +551,14 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                         verticalOffset: 50.0,
                         child: FadeInAnimation(
                           child: _buildChatItem(
-                            name: counselor['full_name'] ?? 'Counselor',
+                            name: isAnonymous ? 'Anonymous Student' : (student['full_name'] ?? 'Student'),
+                            email: isAnonymous ? '' : (student['email'] ?? ''),
                             lastMessage: lastMessage,
                             time: time,
                             unreadCount: unreadCount,
-                            isOnline: counselor['is_online'] ?? false,
+                            isOnline: student['is_online'] ?? false,
                             isVoiceMessage: isVoiceMessage,
                             isAnonymous: isAnonymous,
-                            hasConversation: hasConversation,
                             onTap: () => _navigateToChatDetail(conversation),
                           ),
                         ),
@@ -744,6 +576,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
 
   Widget _buildChatItem({
     required String name,
+    required String email,
     required String lastMessage,
     required String time,
     required int unreadCount,
@@ -751,7 +584,6 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
     required Function() onTap,
     bool isVoiceMessage = false,
     bool isAnonymous = false,
-    bool hasConversation = false,
   }) {
     return GestureDetector(
       onTap: onTap,
@@ -759,13 +591,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
         margin: const EdgeInsets.only(bottom: 16),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: unreadCount > 0
-              ? Colors.blue.shade50
-              : hasConversation
-              ? Colors.white
-              : isAnonymous
-              ? Colors.grey.shade100  // Darker background for anonymous
-              : Colors.grey.shade50,  // Lighter background for regular
+          color: unreadCount > 0 ? Colors.blue.shade50 : Colors.white,
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
@@ -774,9 +600,6 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
               offset: const Offset(0, 2),
             ),
           ],
-          border: isAnonymous
-              ? Border.all(color: Colors.grey.shade300, width: 1)
-              : null,
         ),
         child: Row(
           children: [
@@ -787,11 +610,11 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                   width: 56,
                   height: 56,
                   decoration: BoxDecoration(
-                    color: isAnonymous ? Colors.grey.shade700 : AppColors.counselorColor,
+                    color: isAnonymous ? Colors.grey.shade700 : AppColors.primary,
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: (isAnonymous ? Colors.grey.shade700 : AppColors.counselorColor).withOpacity(0.3),
+                        color: (isAnonymous ? Colors.grey.shade700 : AppColors.primary).withOpacity(0.3),
                         blurRadius: 8,
                         offset: const Offset(0, 3),
                       ),
@@ -834,42 +657,20 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Row(
-                        children: [
-                          Text(
-                            name,
-                            style: TextStyle(
-                              fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.w600,
-                              fontSize: 16,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          if (isAnonymous) ...[
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.grey.shade800,
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: const Text(
-                                'Anonymous',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
+                      Text(
+                        name,
+                        style: TextStyle(
+                          fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.w600,
+                          fontSize: 16,
+                          color: Colors.black87,
+                        ),
                       ),
                       if (time.isNotEmpty)
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
                             color: unreadCount > 0
-                                ? AppColors.primary.withOpacity(0.1)
+                                ? AppColors.counselorColor.withOpacity(0.1)
                                 : Colors.grey.shade100,
                             borderRadius: BorderRadius.circular(12),
                           ),
@@ -877,7 +678,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                             time,
                             style: TextStyle(
                               color: unreadCount > 0
-                                  ? AppColors.primary
+                                  ? AppColors.counselorColor
                                   : Colors.grey.shade600,
                               fontSize: 12,
                               fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal,
@@ -886,6 +687,18 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                         ),
                     ],
                   ),
+                  if (email.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      email,
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 12,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                   const SizedBox(height: 6),
                   Row(
                     children: [
@@ -894,13 +707,13 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                           margin: const EdgeInsets.only(right: 6),
                           padding: const EdgeInsets.all(4),
                           decoration: BoxDecoration(
-                            color: AppColors.primary.withOpacity(0.1),
+                            color: AppColors.counselorColor.withOpacity(0.1),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Icon(
                             Icons.mic,
                             size: 16,
-                            color: AppColors.primary,
+                            color: AppColors.counselorColor,
                           ),
                         ),
                       if (isAnonymous && !isVoiceMessage)
@@ -917,37 +730,16 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                             color: Colors.grey.shade800,
                           ),
                         ),
-                      if (!hasConversation)
-                        Container(
-                          margin: const EdgeInsets.only(right: 6),
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            color: isAnonymous
-                                ? Colors.grey.shade700.withOpacity(0.1)
-                                : Colors.blue.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(
-                            Icons.add_comment,
-                            size: 16,
-                            color: isAnonymous ? Colors.grey.shade700 : Colors.blue,
-                          ),
-                        ),
                       Expanded(
                         child: Text(
                           lastMessage,
                           style: TextStyle(
                             color: unreadCount > 0
                                 ? Colors.black87
-                                : hasConversation
-                                ? Colors.grey.shade600
-                                : isAnonymous
-                                ? Colors.grey.shade700
-                                : Colors.blue.shade700, // Blue text for new conversations
+                                : Colors.grey.shade600,
                             fontWeight: unreadCount > 0
                                 ? FontWeight.w500
                                 : FontWeight.normal,
-                            fontStyle: !hasConversation ? FontStyle.italic : FontStyle.normal,
                             fontSize: 14,
                           ),
                           maxLines: 1,
@@ -959,11 +751,11 @@ class _StudentChatScreenState extends State<StudentChatScreen> with SingleTicker
                           margin: const EdgeInsets.only(left: 8),
                           padding: const EdgeInsets.all(6),
                           decoration: BoxDecoration(
-                            color: AppColors.primary,
+                            color: AppColors.counselorColor,
                             shape: BoxShape.circle,
                             boxShadow: [
                               BoxShadow(
-                                color: AppColors.primary.withOpacity(0.3),
+                                color: AppColors.counselorColor.withOpacity(0.3),
                                 blurRadius: 4,
                                 offset: const Offset(0, 2),
                               ),

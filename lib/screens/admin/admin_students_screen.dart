@@ -5,14 +5,14 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:intl/intl.dart';
 import '../../utils/app_colors.dart';
 
-class CounselorStudentsScreen extends StatefulWidget {
-  const CounselorStudentsScreen({Key? key}) : super(key: key);
+class AdminStudentsScreen extends StatefulWidget {
+  const AdminStudentsScreen({Key? key}) : super(key: key);
 
   @override
-  State<CounselorStudentsScreen> createState() => _CounselorStudentsScreenState();
+  State<AdminStudentsScreen> createState() => _AdminStudentsScreenState();
 }
 
-class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
+class _AdminStudentsScreenState extends State<AdminStudentsScreen> {
   final firebase.FirebaseAuth _firebaseAuth = firebase.FirebaseAuth.instance;
   final SupabaseClient _supabase = Supabase.instance.client;
 
@@ -44,91 +44,37 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
     });
 
     try {
-      final currentUser = _firebaseAuth.currentUser!;
+      // Get all students
+      final studentsData = await _supabase
+          .from('user_profiles')
+          .select('*')
+          .eq('user_type', 'student')
+          .order('full_name');
 
-      // Get all appointments for this counselor, excluding anonymous ones for student listing
-      final appointmentsData = await _supabase
-          .from('appointments')
-          .select('student_id, status, is_anonymous')
-          .eq('counselor_id', currentUser.uid)
-          .not('status', 'eq', 'cancelled');
+      print('Loaded students: ${studentsData.length}');
 
-      print('Loaded appointments: ${appointmentsData.length}');
-
-      // Filter out anonymous appointments for student listing
-      final nonAnonymousAppointments = appointmentsData
-          .where((appointment) => !(appointment['is_anonymous'] as bool? ?? false))
-          .toList();
-
-      // Extract unique student IDs from non-anonymous appointments only
-      final studentIds = nonAnonymousAppointments
-          .map((appointment) => appointment['student_id'] as String?)
-          .where((id) => id != null)
-          .toSet();
-
-      if (studentIds.isEmpty) {
-        setState(() {
-          _students = [];
-          _isLoading = false;
-        });
-        return;
-      }
-
-      // Count non-anonymous appointments per student
+      // Get appointment counts for each student
       Map<String, int> appointmentCounts = {};
-      for (var appointment in nonAnonymousAppointments) {
-        final studentId = appointment['student_id'] as String?;
+      for (var student in studentsData) {
+        final studentId = student['user_id'] as String?;
         if (studentId != null) {
-          appointmentCounts[studentId] = (appointmentCounts[studentId] ?? 0) + 1;
-        }
-      }
+          try {
+            // Count all appointments (both anonymous and non-anonymous)
+            final appointmentsData = await _supabase
+                .from('appointments')
+                .select('id')
+                .eq('student_id', studentId);
 
-      // Fetch student profiles one by one
-      List<Map<String, dynamic>> students = [];
-      for (var studentId in studentIds) {
-        if (studentId == null) continue;
-
-        try {
-          final studentData = await _supabase
-              .from('user_profiles')
-              .select('*')
-              .eq('user_id', studentId)
-              .single();
-
-          // Add appointment count to student data
-          studentData['appointment_count'] = appointmentCounts[studentId] ?? 0;
-
-          // Get the latest non-anonymous appointment
-          final latestAppointment = await _supabase
-              .from('appointments')
-              .select('*')
-              .eq('counselor_id', currentUser.uid)
-              .eq('student_id', studentId)
-              .eq('is_anonymous', false)  // Only get non-anonymous appointments
-              .not('status', 'eq', 'cancelled')
-              .order('appointment_date', ascending: false)
-              .limit(1)
-              .maybeSingle();
-
-          if (latestAppointment != null) {
-            studentData['latest_appointment'] = latestAppointment;
+            appointmentCounts[studentId] = appointmentsData.length;
+          } catch (e) {
+            print('Error fetching appointment count for student $studentId: $e');
+            appointmentCounts[studentId] = 0;
           }
-
-          students.add(studentData);
-        } catch (e) {
-          print('Error fetching student profile: $e');
         }
       }
-
-      // Sort students by name
-      students.sort((a, b) {
-        final aName = a['full_name'] as String? ?? '';
-        final bName = b['full_name'] as String? ?? '';
-        return aName.compareTo(bName);
-      });
 
       setState(() {
-        _students = students;
+        _students = List<Map<String, dynamic>>.from(studentsData);
         _appointmentCounts = appointmentCounts;
         _isLoading = false;
       });
@@ -196,13 +142,13 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'My Students',
+          'All Students',
           style: TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.bold,
           ),
         ),
-        backgroundColor: AppColors.counselorColor,
+        backgroundColor: AppColors.adminColor,
         elevation: 0,
         actions: [
           IconButton(
@@ -241,7 +187,7 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: AppColors.counselorColor),
+                  borderSide: const BorderSide(color: AppColors.adminColor),
                 ),
                 filled: true,
                 fillColor: Colors.white,
@@ -301,7 +247,7 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
           ElevatedButton(
             onPressed: _loadStudents,
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.counselorColor,
+              backgroundColor: AppColors.adminColor,
             ),
             child: const Text('Retry'),
           ),
@@ -318,11 +264,11 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
           const Icon(
             Icons.people,
             size: 80,
-            color: AppColors.counselorColor,
+            color: AppColors.adminColor,
           ),
           const SizedBox(height: 16),
           const Text(
-            'No Students Yet',
+            'No Students Found',
             style: TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.bold,
@@ -330,18 +276,9 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'You don\'t have any students yet',
+            'There are no students registered in the system',
             style: TextStyle(
               fontSize: 16,
-              color: AppColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Students will appear here once they schedule appointments with you',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 14,
               color: AppColors.textSecondary,
             ),
           ),
@@ -349,7 +286,7 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
           ElevatedButton(
             onPressed: _loadStudents,
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.counselorColor,
+              backgroundColor: AppColors.adminColor,
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             ),
             child: const Text('Refresh'),
@@ -402,13 +339,11 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
           final student = filteredStudents[index];
           final studentId = student['user_id'] as String?;
           final appointmentCount = studentId != null ? (_appointmentCounts[studentId] ?? 0) : 0;
-          final latestAppointment = student['latest_appointment'] as Map<String, dynamic>?;
           final isOnline = student['is_online'] ?? false;
 
           return _buildStudentCard(
             student: student,
             appointmentCount: appointmentCount,
-            latestAppointment: latestAppointment,
             isOnline: isOnline,
           );
         },
@@ -420,23 +355,12 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
     required Map<String, dynamic> student,
     required int appointmentCount,
     required bool isOnline,
-    Map<String, dynamic>? latestAppointment,
   }) {
     final fullName = student['full_name'] as String? ?? 'Unknown Student';
     final email = student['email'] as String? ?? 'No email';
-
-    String lastAppointmentText = 'No appointments yet';
-    if (latestAppointment != null) {
-      final appointmentDate = DateTime.parse(latestAppointment['appointment_date']);
-      final now = DateTime.now();
-      final isUpcoming = appointmentDate.isAfter(now);
-
-      if (isUpcoming) {
-        lastAppointmentText = 'Next: ${DateFormat('MMM d, yyyy').format(appointmentDate)}';
-      } else {
-        lastAppointmentText = 'Last: ${DateFormat('MMM d, yyyy').format(appointmentDate)}';
-      }
-    }
+    final createdAt = student['created_at'] != null
+        ? DateTime.parse(student['created_at'])
+        : null;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -455,7 +379,7 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
               Stack(
                 children: [
                   CircleAvatar(
-                    backgroundColor: AppColors.counselorColor,
+                    backgroundColor: AppColors.studentColor,
                     radius: 24,
                     child: const Icon(
                       Icons.person,
@@ -521,13 +445,13 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: AppColors.counselorColor.withOpacity(0.1),
+                            color: AppColors.studentColor.withOpacity(0.1),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
                             '$appointmentCount ${appointmentCount == 1 ? 'session' : 'sessions'}',
                             style: const TextStyle(
-                              color: AppColors.counselorColor,
+                              color: AppColors.studentColor,
                               fontWeight: FontWeight.bold,
                               fontSize: 12,
                             ),
@@ -555,7 +479,9 @@ class _CounselorStudentsScreenState extends State<CounselorStudentsScreen> {
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          lastAppointmentText,
+                          createdAt != null
+                              ? 'Joined: ${DateFormat('MMM d, yyyy').format(createdAt)}'
+                              : 'Join date unknown',
                           style: TextStyle(
                             color: Colors.grey.shade600,
                             fontSize: 12,
@@ -602,16 +528,17 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
 
   bool _isLoading = true;
   List<Map<String, dynamic>> _appointments = [];
+  List<Map<String, dynamic>> _counselors = [];
   int _anonymousAppointmentsCount = 0;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _loadStudentAppointments();
+    _loadStudentData();
   }
 
-  Future<void> _loadStudentAppointments() async {
+  Future<void> _loadStudentData() async {
     if (_firebaseAuth.currentUser == null) return;
 
     final studentId = widget.student['user_id'] as String?;
@@ -623,40 +550,71 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
     });
 
     try {
-      final currentUser = _firebaseAuth.currentUser!;
-
-      // First, count anonymous appointments separately
+      // Count anonymous appointments separately
       final anonymousAppointmentsResponse = await _supabase
           .from('appointments')
           .select()
-          .eq('counselor_id', currentUser.uid)
           .eq('student_id', studentId)
           .eq('is_anonymous', true);
 
-      // Get all non-anonymous appointments between this counselor and student
+      int anonymousAppointmentsCount = anonymousAppointmentsResponse.length;
+
+      // Get all non-anonymous appointments for this student
       final appointmentsData = await _supabase
           .from('appointments')
-          .select('*')
-          .eq('counselor_id', currentUser.uid)
+          .select('*, counselor_id')
           .eq('student_id', studentId)
           .eq('is_anonymous', false)  // Only get non-anonymous appointments
           .order('appointment_date', ascending: false);
 
       print('Loaded student appointments: ${appointmentsData.length}');
-      print('Anonymous appointments count: ${anonymousAppointmentsResponse.length}');
+      print('Anonymous appointments count: $anonymousAppointmentsCount');
+
+      // Get counselor details for each appointment
+      final Set<String> counselorIds = {};
+      for (var appointment in appointmentsData) {
+        final counselorId = appointment['counselor_id'] as String?;
+        if (counselorId != null) {
+          counselorIds.add(counselorId);
+        }
+      }
+
+      List<Map<String, dynamic>> counselors = [];
+      for (var counselorId in counselorIds) {
+        try {
+          final counselorData = await _supabase
+              .from('user_profiles')
+              .select('*')
+              .eq('user_id', counselorId)
+              .single();
+
+          counselors.add(counselorData);
+        } catch (e) {
+          print('Error fetching counselor profile: $e');
+        }
+      }
 
       setState(() {
         _appointments = List<Map<String, dynamic>>.from(appointmentsData);
-        _anonymousAppointmentsCount = anonymousAppointmentsResponse.length;
+        _counselors = counselors;
+        _anonymousAppointmentsCount = anonymousAppointmentsCount;
         _isLoading = false;
       });
     } catch (e) {
-      print('Error loading student appointments: $e');
+      print('Error loading student data: $e');
       setState(() {
-        _errorMessage = 'Failed to load appointments: $e';
+        _errorMessage = 'Failed to load data: $e';
         _isLoading = false;
       });
     }
+  }
+
+  String _getCounselorName(String counselorId) {
+    final counselor = _counselors.firstWhere(
+          (c) => c['user_id'] == counselorId,
+      orElse: () => {'full_name': 'Unknown Counselor'},
+    );
+    return counselor['full_name'] as String? ?? 'Unknown Counselor';
   }
 
   @override
@@ -665,9 +623,9 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
     final email = widget.student['email'] as String? ?? 'No email';
     final phone = widget.student['phone'] as String? ?? 'No phone number';
     final isOnline = widget.student['is_online'] ?? false;
-
-    // Total appointments includes both anonymous and non-anonymous
-    final totalAppointments = _appointments.length + _anonymousAppointmentsCount;
+    final createdAt = widget.student['created_at'] != null
+        ? DateTime.parse(widget.student['created_at'])
+        : null;
 
     return Container(
       decoration: const BoxDecoration(
@@ -699,7 +657,7 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
                 Stack(
                   children: [
                     CircleAvatar(
-                      backgroundColor: AppColors.counselorColor,
+                      backgroundColor: AppColors.studentColor,
                       radius: 30,
                       child: const Icon(
                         Icons.person,
@@ -784,13 +742,13 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                          color: AppColors.counselorColor.withOpacity(0.1),
+                          color: AppColors.studentColor.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Text(
-                          '$totalAppointments ${totalAppointments == 1 ? 'session' : 'sessions'}',
+                          '${widget.appointmentCount} ${widget.appointmentCount == 1 ? 'session' : 'sessions'}',
                           style: const TextStyle(
-                            color: AppColors.counselorColor,
+                            color: AppColors.studentColor,
                             fontWeight: FontWeight.bold,
                             fontSize: 12,
                           ),
@@ -834,6 +792,13 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
                     label: 'Phone',
                     value: phone,
                   ),
+                // Account creation date
+                if (createdAt != null)
+                  _buildContactItem(
+                    icon: Icons.calendar_today,
+                    label: 'Joined',
+                    value: DateFormat('MMMM d, yyyy').format(createdAt),
+                  ),
                 // Last active time
                 if (!isOnline && widget.student['last_active_at'] != null)
                   _buildContactItem(
@@ -860,9 +825,9 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
                     fontSize: 16,
                   ),
                 ),
-                if (!_isLoading && totalAppointments > 0)
+                if (!_isLoading)
                   Text(
-                    '$totalAppointments ${totalAppointments == 1 ? 'appointment' : 'appointments'}',
+                    '${_appointments.length + _anonymousAppointmentsCount} ${_appointments.length + _anonymousAppointmentsCount == 1 ? 'appointment' : 'appointments'} (${_anonymousAppointmentsCount} anonymous)',
                     style: TextStyle(
                       color: Colors.grey.shade600,
                       fontSize: 14,
@@ -872,7 +837,6 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
             ),
           ),
 
-          // Anonymous appointments note (if any)
           if (_anonymousAppointmentsCount > 0)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16.0),
@@ -957,7 +921,7 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
           Icon(
             icon,
             size: 20,
-            color: AppColors.counselorColor,
+            color: AppColors.studentColor,
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1001,9 +965,9 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
           Text(_errorMessage ?? 'Unknown error'),
           const SizedBox(height: 24),
           ElevatedButton(
-            onPressed: _loadStudentAppointments,
+            onPressed: _loadStudentData,
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.counselorColor,
+              backgroundColor: AppColors.adminColor,
             ),
             child: const Text('Retry'),
           ),
@@ -1033,7 +997,7 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
             ),
             const SizedBox(height: 8),
             Text(
-              'This student only has anonymous appointments with you',
+              'This student only has anonymous appointments',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 14,
@@ -1064,7 +1028,7 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
           ),
           const SizedBox(height: 8),
           Text(
-            'You have no appointments with this student',
+            'This student has not scheduled any appointments',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 14,
@@ -1087,6 +1051,8 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
         final status = appointment['status'] as String? ?? 'pending';
         final title = appointment['title'] as String? ?? 'Counseling Session';
         final description = appointment['description'] as String? ?? '';
+        final counselorId = appointment['counselor_id'] as String?;
+        final counselorName = counselorId != null ? _getCounselorName(counselorId) : 'Unknown Counselor';
 
         final now = DateTime.now();
         final isUpcoming = appointmentDate.isAfter(now);
@@ -1169,6 +1135,24 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
                   ],
                 ),
                 const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.person,
+                      size: 16,
+                      color: AppColors.counselorColor,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Counselor: $counselorName',
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
                 Text(
                   title,
                   style: const TextStyle(
@@ -1183,34 +1167,6 @@ class _StudentDetailsSheetState extends State<StudentDetailsSheet> {
                     style: TextStyle(
                       color: Colors.grey.shade700,
                       fontSize: 14,
-                    ),
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-
-                // Show counselor notes for completed appointments
-                if (status == 'completed' &&
-                    appointment['counselor_notes'] != null &&
-                    appointment['counselor_notes'].toString().isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  const Divider(),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Your Notes:',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey.shade600,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    appointment['counselor_notes'],
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey.shade800,
-                      fontStyle: FontStyle.italic,
                     ),
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,

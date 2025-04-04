@@ -148,17 +148,8 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
           print('Navigating to counselor home screen');
           Navigator.pushReplacementNamed(context, '/counselor_home');
         } else if (userType == 'admin') {
-          print('Admin interface not implemented yet');
-          Fluttertoast.showToast(
-              msg: "Admin interface coming soon",
-              toastLength: Toast.LENGTH_LONG,
-              gravity: ToastGravity.BOTTOM,
-              backgroundColor: Colors.orange,
-              textColor: Colors.white,
-              fontSize: 16.0
-          );
-          // For now, go to sign in screen
-          Navigator.pushReplacementNamed(context, '/signin');
+          print('Navigating to admin home screen');
+          Navigator.pushReplacementNamed(context, '/admin_home');
         } else {
           // Unknown or null user type, go to sign in screen
           print('Unknown user type or error fetching profile: $userType');
@@ -269,3 +260,4 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     );
   }
 }
+

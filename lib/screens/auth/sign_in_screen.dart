@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../utils/app_colors.dart';
 import 'sign_up_screen.dart';
 import 'forgot_password_screen.dart';
@@ -30,6 +31,29 @@ class _SignInScreenState extends State<SignInScreen> {
   final SupabaseClient _supabase = Supabase.instance.client;
 
   @override
+  void initState() {
+    super.initState();
+    _loadSavedCredentials();
+  }
+
+  Future<void> _loadSavedCredentials() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedEmail = prefs.getString('saved_email');
+      final rememberMe = prefs.getBool('remember_me') ?? false;
+
+      if (savedEmail != null && rememberMe) {
+        setState(() {
+          _emailController.text = savedEmail;
+          _rememberMe = true;
+        });
+      }
+    } catch (e) {
+      print('Error loading saved credentials: $e');
+    }
+  }
+
+  @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
@@ -38,6 +62,19 @@ class _SignInScreenState extends State<SignInScreen> {
 
   Future<void> _signIn() async {
     if (_formKey.currentState!.validate()) {
+      // Save or clear credentials based on "Remember Me" checkbox
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (_rememberMe) {
+          await prefs.setString('saved_email', _emailController.text.trim());
+          await prefs.setBool('remember_me', true);
+        } else {
+          await prefs.remove('saved_email');
+          await prefs.setBool('remember_me', false);
+        }
+      } catch (e) {
+        print('Error managing saved credentials: $e');
+      }
       setState(() {
         _isLoading = true;
         _errorMessage = null;
@@ -51,54 +88,7 @@ class _SignInScreenState extends State<SignInScreen> {
         );
 
         if (userCredential.user != null) {
-          // Update online status in Supabase
           final userId = userCredential.user!.uid;
-          final now = DateTime.now().toIso8601String();
-
-          try {
-            // Debug print
-            print('Attempting to update online status for user: $userId');
-
-            // Update user's online status - using direct SQL for more reliable update
-            final response = await _supabase.rpc(
-              'update_user_online_status',
-              params: {
-                'user_id_param': userId,
-                'is_online_param': true,
-                'last_active_param': now
-              },
-            );
-
-            print('Update response: $response');
-            print('Updated online status to true');
-
-            // Fallback direct update if RPC fails
-            if (response == null) {
-              final directUpdate = await _supabase
-                  .from('user_profiles')
-                  .update({
-                'is_online': true,
-                'last_active_at': now,
-              })
-                  .eq('user_id', userId);
-
-              print('Direct update response: $directUpdate');
-            }
-          } catch (updateError) {
-            print('Error updating online status: $updateError');
-
-            // Try one more approach with a different syntax
-            try {
-              await _supabase.from('user_profiles')
-                  .update({'is_online': true, 'last_active_at': now})
-                  .match({'user_id': userId});
-              print('Updated with match syntax');
-            } catch (e) {
-              print('Match syntax update failed: $e');
-            }
-
-            // Continue even if update fails
-          }
 
           // Fetch user profile from Supabase
           try {
@@ -153,6 +143,26 @@ class _SignInScreenState extends State<SignInScreen> {
               }
             }
 
+            // Save credentials if "Remember Me" is checked
+            if (_rememberMe) {
+              try {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('saved_email', _emailController.text.trim());
+                await prefs.setBool('remember_me', true);
+              } catch (e) {
+                print('Error saving credentials: $e');
+              }
+            } else {
+              // Clear saved credentials if "Remember Me" is unchecked
+              try {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.remove('saved_email');
+                await prefs.setBool('remember_me', false);
+              } catch (e) {
+                print('Error clearing credentials: $e');
+              }
+            }
+
             // Navigate based on user type
             if (mounted) {
               if (userType == 'student') {
@@ -162,17 +172,8 @@ class _SignInScreenState extends State<SignInScreen> {
                 print('Navigating to counselor home screen');
                 Navigator.pushReplacementNamed(context, '/counselor_home');
               } else if (userType == 'admin') {
-                print('Admin interface not implemented yet');
-                Fluttertoast.showToast(
-                    msg: "Admin interface coming soon",
-                    toastLength: Toast.LENGTH_LONG,
-                    gravity: ToastGravity.BOTTOM,
-                    backgroundColor: Colors.orange,
-                    textColor: Colors.white,
-                    fontSize: 16.0
-                );
-                // For now, go to sign in screen
-                Navigator.pushReplacementNamed(context, '/signin');
+                print('Navigating to admin home screen');
+                Navigator.pushReplacementNamed(context, '/admin_home');
               } else {
                 // Unknown or null user type, use selected user type as fallback
                 print('Using selected user type as fallback: $_selectedUserType');
@@ -181,6 +182,8 @@ class _SignInScreenState extends State<SignInScreen> {
                   Navigator.pushReplacementNamed(context, '/student_home');
                 } else if (_selectedUserType.toLowerCase() == 'counselor') {
                   Navigator.pushReplacementNamed(context, '/counselor_home');
+                } else if (_selectedUserType.toLowerCase() == 'admin') {
+                  Navigator.pushReplacementNamed(context, '/admin_home');
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
@@ -199,6 +202,8 @@ class _SignInScreenState extends State<SignInScreen> {
                 Navigator.pushReplacementNamed(context, '/student_home');
               } else if (_selectedUserType.toLowerCase() == 'counselor') {
                 Navigator.pushReplacementNamed(context, '/counselor_home');
+              } else if (_selectedUserType.toLowerCase() == 'admin') {
+                Navigator.pushReplacementNamed(context, '/admin_home');
               } else {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
@@ -563,3 +568,4 @@ class _SignInScreenState extends State<SignInScreen> {
     );
   }
 }
+
